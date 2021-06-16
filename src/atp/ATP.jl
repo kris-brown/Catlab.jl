@@ -5,13 +5,97 @@ using Catlab.CategoricalAlgebra.CSets
 using Catlab.CategoricalAlgebra.StructuredCospans
 using Catlab.Present: translate_generator
 using Catlab.CategoricalAlgebra.FinSets
+using Catlab.Theories: attr, adom
+using Catlab.CategoricalAlgebra.DPO
 
 using DataStructures: IntDisjointSets
 
 """
-Apply inequality as a rewrite rule
+Apply equality as a rewrite rule
 """
-function apply_ineq(sd, ineq)
+function apply_eq(sc_cset::ACSet, Σ::Set{Box{Symbol}},
+                  rule::Pair{WiringDiagram{Any,Any,Any,Any},
+                             WiringDiagram{Any,Any,Any,Any}},
+                  forward::Bool=true) where {L}
+    l, r = forward ? (rule[1], rule[2]) : (rule[2], rule[1])
+    pat = wd_to_cospan(l, Σ)[2]
+    rem_IO!(pat)
+    m = homomorphism(pat, sc_cset)
+    L_ = id(pat)
+    R_ = wd_to_cospan(branch2(l, r), Σ)[2]
+    Rs = homomorphisms(pat, R_)
+    @assert length(Rs) == 1
+    R = Rs[1] # this should be done cleaner
+    @assert dom(L_) == dom(R)
+    new_apex = rewrite_match(L_, R, m)
+    return new_apex
+end
+
+function rem_IO!(sc_cset::ACSet)::Nothing
+    rem_parts!(sc_cset, :_I, 1:nparts(sc_cset,:_I))
+    rem_parts!(sc_cset, :_O, 1:nparts(sc_cset,:_O))
+end
+
+function branch(Σ, l::WiringDiagram, r::WiringDiagram)::ACSetTransformation
+    aptype, _, _, _ = sigma_to_hyptype(Σ);
+    cd, ad = aptype.body.body.parameters[1:2]
+    _, lcset = wd_to_cospan(l, Σ);
+    l_i, l_o = [deepcopy(lcset[x]) for x in [:_i,:_o]]
+    rem_IO!(lcset)
+
+    comps = Dict([o=>collect(1:nparts(lcset, o)) for o in ob(cd)])
+    R = deepcopy(lcset);
+    _, rcset = wd_to_cospan(r, Σ);
+    r_i, r_o = [deepcopy(rcset[x]) for x in [:_i,:_o]]
+    newinds = Dict{Symbol, Vector{Int}}([:V=>Int[]])
+    for o in filter(!=(:V), ob(cd))
+        newinds[o] = add_parts!(R, o, nparts(rcset, o))
+    end
+
+    for i in 1:nparts(rcset, :V)
+        leftind  = findfirst(==(i), r_i)
+        rightind = findfirst(==(i), r_o)
+        if !(leftind===nothing)
+            push!(newinds[:V], l_i[leftind])
+        elseif !(rightind===nothing)
+            push!(newinds[:V], l_o[rightind])
+        else
+            push!(newinds[:V], add_part!(R, :V))
+        end
+    end
+    for (src, tgt, h) in zip(dom(cd), codom(cd), hom(cd))
+        srcsym, tgtsym = ob(cd)[src], ob(cd)[tgt]
+        set_subpart!(R, newinds[srcsym], h, newinds[tgtsym][rcset[h]])
+    end
+    for (src, h) in zip(adom(ad),attr(ad))
+        srcsym = ob(cd)[src]
+        set_subpart!(R, newinds[srcsym], h, rcset[h])
+    end
+    return ACSetTransformation(deepcopy(lcset), R; comps...)
+end
+
+function branch2(l::WiringDiagram, r::WiringDiagram)::WiringDiagram
+    ld, rd = l.diagram, r.diagram
+    nin, nout = [nparts(ld, x) for x in [:OuterInPort, :OuterOutPort]]
+    res = WiringDiagram([nothing for _ in 1:nin],
+                        [nothing for _ in 1:nout])
+    inboxes = [add_box!(res, δ) for _ in 1:nin]
+    outboxes = [add_box!(res, μ) for _ in 1:nin]
+    subbox = Box([nothing for _ in 1:nin], [nothing for _ in 1:nout])
+    b1, b2 = [add_box!(res, subbox) for _ in 1:2]
+    for i in 1:nin
+        add_wires!(res, Pair[
+            (input_id(res), i) => (inboxes[i], 1),
+            (inboxes[i], 1) => (b1, i),
+            (inboxes[i], 2) => (b2, i)])
+    end
+    for i in 1:nout
+        add_wires!(res, Pair[
+            (outboxes[i], 1) => (output_id(res), i),
+            (b1, i) => (outboxes[i], 1),
+            (b2, i) => (outboxes[i], 2)])
+    end
+    return ocompose(res, [repeat([δsd], nin)...,repeat([μsd], nout)..., l, r])
 end
 
 """
@@ -19,7 +103,7 @@ Prove an inequality in a relational theory
 Return homomorphism as witness, if any
 Takes in wiring diagram csets c1 and c2
 """
-function prove(rt, c1,c2)::Union{Nothing, Any}
+function prove(rt, c1, c2)::Union{Nothing, Any}
     Σ, I = rt
     csp1 = sd_to_cospan(c1, Σ)
     csp2 = sd_to_cospan(c2, Σ)
@@ -42,15 +126,23 @@ end
 
 # Tests
 
-
 Zero, One, Two, Three, Four, Five, Six = [collect(repeat([nothing], n)) for n in 0:6]
 ϵ, η, δ, μ, dot = [Box(nothing, x, y) for (x, y) in
     [(One, Zero), (Zero, One), (One, Two), (Two, One), (One, One)]]
 
 # Generators for special commutative Frobenius algebra
 scfa = [ϵ, η, δ, μ]
-
-
+δsd, μsd = WiringDiagram(One, Two), WiringDiagram(Two, One)
+add_box!(δsd, δ)
+add_box!(μsd, μ)
+add_wires!(δsd, Pair[
+    (input_id(δsd), 1) => (1,1),
+    (1,1) => (output_id(δsd), 1),
+    (1,2) => (output_id(δsd), 2)])
+add_wires!(μsd, Pair[
+    (input_id(μsd), 1) => (1,1),
+    (input_id(μsd), 2) => (1,2),
+    (1,1) => (output_id(μsd), 1)])
 
 """
 Given a signature, create an OpenCSetType for hypergraphs
@@ -93,7 +185,15 @@ function sigma_to_hyptype(Σ::Set{Box{Symbol}})
     end
     acst = ACSetType(pres, index=[])
     obtype, sctype = OpenACSetTypes(acst, :V)
-    return acst{Symbol}, obtype{Symbol}, sctype{Symbol}
+
+    # Explicit cospan CSet
+    _I, _O = Ob(FreeSchema, :_I), Ob(FreeSchema, :_O)
+    add_generator!(pres, _I)
+    add_generator!(pres, _O)
+    add_generator!(pres, Hom(:_i, _I, xobs[1]))
+    add_generator!(pres, Hom(:_o, _O, xobs[1]))
+    cspcset = ACSetType(pres, index=[])
+    return acst{Symbol}, obtype{Symbol}, sctype{Symbol}, cspcset{Symbol}
 end
 
 function hypsyms(i::Int, j::Int)::Tuple{Symbol, Symbol, Vector{Symbol}, Vector{Symbol}}
@@ -107,6 +207,7 @@ end
 
 """
 Add a empty node between each generator and the outerbox
+and a node between each generator
 """
 function wd_pad!(sd)::Nothing
     d = sd.diagram
@@ -128,28 +229,21 @@ function wd_pad!(sd)::Nothing
             end
         end
     end
-
-    # for (ow, (os, ot, _)) in enumerate(d.tables[:OutWire])
-    #     if !(d[:value][d[:out_port_box][os]] === nothing)
-    #         newbox = add_part!(d, :Box, value=nothing, box_type=Box{Nothing})
-    #         new_in = add_part!(d, :InPort, in_port_box=newbox, in_port_type=nothing)
-    #         new_out = add_part!(d, :OutPort, out_port_box=newbox, out_port_type=nothing)
-    #         add_part!(d, :OutWire, out_src=new_out, out_tgt=ot)
-    #         add_part!(d, :Wire, src=os, tgt=new_in, wire_value=nothing)
-    #         push!(out_delete, ow)
-    #     end
-    # end
-    # for (iw, (is, it, _)) in enumerate(d.tables[:InWire])
-    #     if !(d[:value][d[:in_port_box][it]] === nothing)
-    #         newbox = add_part!(d, :Box, value=nothing, box_type=Box{Nothing})
-    #         new_in = add_part!(d, :InPort, in_port_box=newbox, in_port_type=nothing)
-    #         new_out = add_part!(d, :OutPort, out_port_box=newbox, out_port_type=nothing)
-    #         add_part!(d, :InWire, in_src=is, in_tgt=new_in)
-    #         add_part!(d, :Wire, src=new_out, tgt=it, wire_value=nothing)
-    #         push!(in_delete, iw)
-    #     end
-    # end
+    w_delete = Set{Int}()
+    for (w, (s_port, t_port, _)) in enumerate(d.tables[:Wire])
+        s_box = d[:out_port_box][s_port]
+        t_box = d[:in_port_box][t_port]
+        if !(d[:value][s_box] === nothing ||  d[:value][t_box] === nothing)
+            newbox = add_part!(d, :Box, value=nothing, box_type=Box{Nothing})
+            new_in = add_part!(d, :InPort, in_port_box=newbox, in_port_type=nothing)
+            new_out = add_part!(d, :OutPort, out_port_box=newbox, out_port_type=nothing)
+            add_part!(d, :Wire, src=s_port, tgt=new_in, wire_value=nothing)
+            add_part!(d, :Wire, src=new_out, tgt=t_port, wire_value=nothing)
+            push!(w_delete, w)
+        end
+    end
     # no FKs point to a wire, so we can freely delete them
+    rem_parts!(d, :Wire, sort(collect(w_delete)))
     rem_parts!(d, :InWire, sort(collect(in_delete)))
     rem_parts!(d, :OutWire, sort(collect(out_delete)))
 end
@@ -162,7 +256,7 @@ together.
 function wd_to_cospan(sd, Σ::Set{Box{Symbol}})
     wd_pad!(sd)
     d = sd.diagram
-    aptype, _, sctype = sigma_to_hyptype(Σ)
+    aptype, _, sctype, sccsettype = sigma_to_hyptype(Σ)
 
     nodes = [i for (i, v) in enumerate(d[:value]) if v===nothing]
     conn_comps = IntDisjointSets(nparts(d, :Box))
@@ -209,6 +303,21 @@ function wd_to_cospan(sd, Σ::Set{Box{Symbol}})
     outdata = sort([i=>d[:out_port_box][t] for (t,i,_) in d.tables[:OutWire]]) # (InSrc,InTgt)
     lft = FinFunction([vert_dict[i[2]] for i in indata],n)
     rght = FinFunction([vert_dict[i[2]] for i in outdata],n)
-    return sctype(apx, lft, rght)
+    sc = sctype(apx, lft, rght)
+
+    cset = sccsettype()
+    cd, ad = aptype.body.body.parameters[1:2]
+    for o in ob(cd)
+        add_parts!(cset, o, nparts(apx, o))
+    end
+    for h in [hom(cd)..., attr(ad)...]
+        set_subpart!(cset, h, apx[h])
+    end
+    add_parts!(cset, :_I, length(indata))
+    add_parts!(cset, :_O, length(outdata))
+    set_subpart!(cset, :_i, collect(lft))
+    set_subpart!(cset, :_o, collect(rght))
+
+    return sc, cset
 end
 
