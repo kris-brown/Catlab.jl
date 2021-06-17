@@ -84,6 +84,9 @@ rw2 = apply_eq(rw1, Σ, rightid);
 @test !is_homomorphic(xx_hg, rw1) # not yet
 @test is_homomorphic(xx_hg, rw2) # can prove after applying leftid AND rightid
 
+branch2(mul_assoc_1, mul_assoc_2)
+
+@assert !(prove(Σ, I, idxxid, xx) === nothing)
 ##########################################
 # Relation
 R = Box(:R, One, One);

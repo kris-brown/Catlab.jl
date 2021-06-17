@@ -15,12 +15,16 @@ WDPair = Pair{WiringDiagram{Any,Any,Any,Any},
 """
 Apply equality as a rewrite rule
 """
-function apply_eq(sc_cset::ACSet, Σ::Set{Box{Symbol}},
-                  rule::WDPair, forward::Bool=true) where {L}
+function apply_eq(sc_cset::ACSet{CD}, Σ::Set{Box{Symbol}},
+                  rule::WDPair, forward::Bool=true)::ACSet{CD} where {CD}
     l, r = forward ? (rule[1], rule[2]) : (rule[2], rule[1])
     pat = wd_to_cospan(l, Σ)[2]
     rem_IO!(pat)
     m = homomorphism(pat, sc_cset)
+    if m === nothing
+        println("no match")
+        return sc_cset
+    end
     L_ = id(pat)
     R_ = wd_to_cospan(branch2(l, r), Σ)[2]
     rem_IO!(R_)
@@ -76,13 +80,12 @@ function branch(Σ::Set{Box{Symbol}}, l::WD, r::WD)::ACSetTransformation
 end
 
 function branch2(l::WD, r::WD)::WD
-    ld, rd = l.diagram, r.diagram
+    ld = l.diagram
     nin, nout = [nparts(ld, x) for x in [:OuterInPort, :OuterOutPort]]
-    res = WiringDiagram([nothing for _ in 1:nin],
-                        [nothing for _ in 1:nout])
+    res = WiringDiagram(noth(nin), noth(nout))
     inboxes = [add_box!(res, δ) for _ in 1:nin]
-    outboxes = [add_box!(res, μ) for _ in 1:nin]
-    subbox = Box([nothing for _ in 1:nin], [nothing for _ in 1:nout])
+    outboxes = [add_box!(res, μ) for _ in 1:nout]
+    subbox = Box(noth(nin), noth(nout))
     b1, b2 = [add_box!(res, subbox) for _ in 1:2]
     for i in 1:nin
         add_wires!(res, Pair[
@@ -96,7 +99,9 @@ function branch2(l::WD, r::WD)::WD
             (b1, i) => (outboxes[i], 1),
             (b2, i) => (outboxes[i], 2)])
     end
-    return ocompose(res, [repeat([δsd], nin)...,repeat([μsd], nout)..., l, r])
+    subboxes = [repeat([δsd], nin)...,repeat([μsd], nout)..., l, r]
+    println("subbox length $(length(subboxes))")
+    return ocompose(res, subboxes)
 end
 
 """
@@ -105,8 +110,8 @@ Return homomorphism as witness, if any
 Takes in wiring diagram csets c1 and c2
 """
 function prove(Σ::Set{Box{Symbol}}, I::Set{WDPair} , c1::WD, c2::WD)::Union{Nothing, Any}
-    _, d1 = sd_to_cospan(c1, Σ)
-    _, d2 = sd_to_cospan(c2, Σ)
+    _, d1 = wd_to_cospan(c1, Σ)
+    _, d2 = wd_to_cospan(c2, Σ)
 
     for _ in 1:5
         h = homomorphism(d2, d1)
@@ -114,8 +119,9 @@ function prove(Σ::Set{Box{Symbol}}, I::Set{WDPair} , c1::WD, c2::WD)::Union{Not
             return h
         else
             for i in I
-                apply_eq(d1, Σ, i)
-                apply_eq(d1, Σ, i, false)
+                println("i= $i")
+                d1 = apply_eq(d1, Σ, i)
+                # d1 = apply_eq(d1, Σ, i, false)
             end
         end
     end
