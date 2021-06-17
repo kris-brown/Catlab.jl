@@ -1,16 +1,11 @@
 include("/Users/ksb/Catlab.jl/src/atp/ATP.jl");
 using Catlab.CategoricalAlgebra
 
+##########################################
 
 # Possible generators for a theory of monoids
 mmul = Box(:mul, Two, One);
 e = Box(:e, Zero, One);
-
-# Relation
-R = Box(:R, One, One);
-f = Box(:f, One, One);
-g = Box(:g, One, One);
-
 Σ = Set([mmul, e]);
 
 mul_assoc_1 = WiringDiagram(Three, One);
@@ -52,8 +47,8 @@ mul_assoc = mul_assoc_1 => mul_assoc_2;
 leftid = leftid_1 => passthru;
 rightid = rightid_1 => passthru;
 
-bres = branch2(leftid[1], leftid[2]);
-wd_to_cospan(bres, Σ)
+# bres = branch2(leftid[1], leftid[2]);
+# wd_to_cospan(bres, Σ)
 
 I = Set([mul_assoc, leftid, rightid]);
 
@@ -70,13 +65,30 @@ add_wires!(idxxid, Pair[
     (m3, 1) => (output_id(idxxid), 1)
     ]);
 
-idxxid_sc,idxxid_sc_cset = wd_to_cospan(idxxid, Σ);
-rw = apply_eq(idxxid_sc_cset, Σ, leftid)
+_, idxxid_scp = wd_to_cospan(idxxid, Σ);
 
-idxxid_hg = apex(idxxid_sc);
-leftid_1_hg = apex(wd_to_cospan(leftid_1, Σ)[1]);
-match = homomorphism(leftid_1_hg, idxxid_hg) # only one
 
+xx = WiringDiagram(One, One)
+split, m1 = [add_box!(xx, x) for x in [δ, mmul]]
+add_wires!(xx, Pair[
+    (input_id(xx), 1) => (split, 1),
+    (split, 1) => (m1, 1),
+    (split, 2) => (m1, 2),
+    (m1, 1) => (output_id(xx), 1)]);
+
+_, xx_hg = wd_to_cospan(xx, Σ);
+rw1 = apply_eq(idxxid_scp, Σ, leftid);
+rw2 = apply_eq(rw1, Σ, rightid);
+
+@test !is_homomorphic(xx_hg, idxxid_scp) # not yet
+@test !is_homomorphic(xx_hg, rw1) # not yet
+@test is_homomorphic(xx_hg, rw2) # can prove after applying leftid AND rightid
+
+##########################################
+# Relation
+R = Box(:R, One, One);
+f = Box(:f, One, One);
+g = Box(:g, One, One);
 Σ₂ = Set([R, f, g]);
 
 R_copy = WiringDiagram(One, Two);
@@ -87,6 +99,11 @@ add_wires!(R_copy, Pair[
     (cpy, 1) => (output_id(R_copy), 1),
     (cpy, 2) => (output_id(R_copy), 2)]);
 
+csp,cc = wd_to_cospan(R_copy, Σ₂);
+
+
+
+##########################################
 fig26 = WiringDiagram(One, Two);
 cpy,f1,g1,f2,g2 = [add_box!(fig26, x) for x in [δ, f, g, f, g]];
 add_wires!(fig26, Pair[
@@ -137,10 +154,6 @@ add_wires!(ex211b, Pair[
 
 
 aptype, _, sctype, sccsettype = sigma_to_hyptype(Σ₂);
-
-wd_pad!(R_copy);
-
-csp,cc = wd_to_cospan(R_copy, Σ₂);
 
 csp,cc = wd_to_cospan(fig26, Set([f,g]));
 

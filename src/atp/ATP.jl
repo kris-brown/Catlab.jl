@@ -9,20 +9,21 @@ using Catlab.Theories: attr, adom
 using Catlab.CategoricalAlgebra.DPO
 
 using DataStructures: IntDisjointSets
-
+WD = WiringDiagram{Any,Any,Any,Any}
+WDPair = Pair{WiringDiagram{Any,Any,Any,Any},
+              WiringDiagram{Any,Any,Any,Any}}
 """
 Apply equality as a rewrite rule
 """
 function apply_eq(sc_cset::ACSet, Σ::Set{Box{Symbol}},
-                  rule::Pair{WiringDiagram{Any,Any,Any,Any},
-                             WiringDiagram{Any,Any,Any,Any}},
-                  forward::Bool=true) where {L}
+                  rule::WDPair, forward::Bool=true) where {L}
     l, r = forward ? (rule[1], rule[2]) : (rule[2], rule[1])
     pat = wd_to_cospan(l, Σ)[2]
     rem_IO!(pat)
     m = homomorphism(pat, sc_cset)
     L_ = id(pat)
     R_ = wd_to_cospan(branch2(l, r), Σ)[2]
+    rem_IO!(R_)
     Rs = homomorphisms(pat, R_)
     @assert length(Rs) == 1
     R = Rs[1] # this should be done cleaner
@@ -36,7 +37,7 @@ function rem_IO!(sc_cset::ACSet)::Nothing
     rem_parts!(sc_cset, :_O, 1:nparts(sc_cset,:_O))
 end
 
-function branch(Σ, l::WiringDiagram, r::WiringDiagram)::ACSetTransformation
+function branch(Σ::Set{Box{Symbol}}, l::WD, r::WD)::ACSetTransformation
     aptype, _, _, _ = sigma_to_hyptype(Σ);
     cd, ad = aptype.body.body.parameters[1:2]
     _, lcset = wd_to_cospan(l, Σ);
@@ -74,7 +75,7 @@ function branch(Σ, l::WiringDiagram, r::WiringDiagram)::ACSetTransformation
     return ACSetTransformation(deepcopy(lcset), R; comps...)
 end
 
-function branch2(l::WiringDiagram, r::WiringDiagram)::WiringDiagram
+function branch2(l::WD, r::WD)::WD
     ld, rd = l.diagram, r.diagram
     nin, nout = [nparts(ld, x) for x in [:OuterInPort, :OuterOutPort]]
     res = WiringDiagram([nothing for _ in 1:nin],
@@ -103,21 +104,18 @@ Prove an inequality in a relational theory
 Return homomorphism as witness, if any
 Takes in wiring diagram csets c1 and c2
 """
-function prove(rt, c1, c2)::Union{Nothing, Any}
-    Σ, I = rt
-    csp1 = sd_to_cospan(c1, Σ)
-    csp2 = sd_to_cospan(c2, Σ)
-    d1 = apex(csp1)
-    d2 = apex(csp2)
-    # TODO: color d1 and d2 w/ interface data
-    # As we want a COSPAN morphism of csp2->csp1
+function prove(Σ::Set{Box{Symbol}}, I::Set{WDPair} , c1::WD, c2::WD)::Union{Nothing, Any}
+    _, d1 = sd_to_cospan(c1, Σ)
+    _, d2 = sd_to_cospan(c2, Σ)
+
     for _ in 1:5
         h = homomorphism(d2, d1)
         if !(h===nothing)
             return h
         else
             for i in I
-                apply_eq(d1, i)
+                apply_eq(d1, Σ, i)
+                apply_eq(d1, Σ, i, false)
             end
         end
     end
@@ -125,8 +123,8 @@ function prove(rt, c1, c2)::Union{Nothing, Any}
 end
 
 # Tests
-
-Zero, One, Two, Three, Four, Five, Six = [collect(repeat([nothing], n)) for n in 0:6]
+noth = n -> collect(repeat([nothing], n))
+Zero, One, Two, Three, Four, Five, Six = [noth(n) for n in 0:6]
 ϵ, η, δ, μ, dot = [Box(nothing, x, y) for (x, y) in
     [(One, Zero), (Zero, One), (One, Two), (Two, One), (One, One)]]
 
@@ -209,7 +207,8 @@ end
 Add a empty node between each generator and the outerbox
 and a node between each generator
 """
-function wd_pad!(sd)::Nothing
+function wd_pad(sd::WD)::WD
+    sd = deepcopy(sd)
     d = sd.diagram
     in_delete, out_delete = Set{Int}(), Set{Int}()
     extwires = [:InWire, :OutWire]
@@ -246,6 +245,7 @@ function wd_pad!(sd)::Nothing
     rem_parts!(d, :Wire, sort(collect(w_delete)))
     rem_parts!(d, :InWire, sort(collect(in_delete)))
     rem_parts!(d, :OutWire, sort(collect(out_delete)))
+    return sd
 end
 
 """
@@ -254,7 +254,7 @@ All components connected by Frobenius generators are condensed
 together.
 """
 function wd_to_cospan(sd, Σ::Set{Box{Symbol}})
-    wd_pad!(sd)
+    sd = wd_pad(sd)
     d = sd.diagram
     aptype, _, sctype, sccsettype = sigma_to_hyptype(Σ)
 
@@ -286,13 +286,14 @@ function wd_to_cospan(sd, Σ::Set{Box{Symbol}})
         srcbox, tgtbox = d[:out_port_box][srcport], d[:in_port_box][tgtport]
         if !(srcbox in nodes && tgtbox in nodes)
             if srcbox in nodes || tgtbox in nodes
-                vert, hypedge = srcbox in nodes ? (srcbox, tgtbox) : (tgtbox, srcbox)
+                vert, hypedge, hypport = srcbox in nodes ? (srcbox, tgtbox, tgtport) : (tgtbox, srcbox, srcport)
                 _, _, ins, outs = hs(hypedge)
                 box_ind = box_dict[hypedge]
                 part = srcbox in nodes ? ins : outs
-                boxports = (srcbox in nodes ? inneighbors(sd, hypedge)
-                                         : outneighbors(sd, hypedge))
-                port_ind = findfirst(==(vert), boxports)
+                porttype = srcbox in nodes ? :InPort : :OutPort
+                portbtype = srcbox in nodes ? :in_port_box : :out_port_box
+                boxports = [i for i in 1:nparts(d, porttype) if d[portbtype][i] == hypedge]
+                port_ind = findfirst(==(hypport), boxports)
                 set_subpart!(apx, box_ind, part[port_ind], vert_dict[vert])
             else
             end
@@ -321,3 +322,56 @@ function wd_to_cospan(sd, Σ::Set{Box{Symbol}})
     return sc, cset
 end
 
+function cospan_to_wd(csp::ACSet{CD})::WD where{CD}
+    obs = ob(CD)
+    nin, nout = [nparts(csp, x) for x in [:_I, :_O]]
+    res = WiringDiagram(noth(nin), noth(nout))
+
+    boxdict = Dict()
+    for o in obs[2:end-2] # skip V _I and _O
+        _, o_nin_, o_nout_ = Base.split(string(o), "_")
+        o_nin, o_nout = [parse(Int, x) for x in [o_nin_, o_nout_]]
+        lab = Symbol("l_$(o_nin)_$o_nout")
+        arity = o_nin => o_nout
+        boxdict[arity] = Int[]
+        for j in 1:nparts(csp, o)
+            bx = Box(csp[lab][j], noth(o_nin), noth(o_nout))
+            push!(boxdict[arity], add_box!(res, bx))
+        end
+    end
+
+    @assert obs[1] == :V
+    for i in 1:nparts(csp, :V)
+        v_in  =Tuple{Int, Union{Nothing, Int}}[
+                (-inp, nothing) for inp in 1:nin if csp[:_i][inp] == i]
+        v_out = Tuple{Int, Union{Nothing, Int}}[
+                (-oup, nothing) for oup in 1:nout if csp[:_o][oup] == i]
+        for ((o_nin, o_nout), hypboxes) in collect(boxdict)
+            _, _, osrc, otgt  = hypsyms(o_nin, o_nout)
+            for (hypind, hypbox) in enumerate(hypboxes)
+                for (srcport, srcpart) in enumerate(osrc)
+                    if csp[srcpart][hypind] == i
+                        push!(v_out, (hypbox, srcport))
+                    end
+                end
+                for (tgtort, tgtart) in enumerate(otgt)
+                    if csp[tgtart][hypind] == i
+                        push!(v_in, (hypbox, tgtort))
+                    end
+                end
+            end
+        end
+        # b = add_box!(res, Box(noth(length(v_in)), noth(length(v_out))))
+        b = add_box!(res, Box(noth(1), noth(1)))
+
+        for (ind, (v_i, port)) in enumerate(v_in)
+            src = v_i < 0 ? (input_id(res),-v_i) : (v_i, port)
+            add_wire!(res, src => (b,1)) # replace 1 w/ ind to have distinct ports
+        end
+        for (ind, (v_o, port)) in enumerate(v_out)
+            tgt = v_o < 0 ?  (output_id(res),-v_o) : (v_o, port)
+            add_wire!(res, (b,1) => tgt) # see above
+        end
+    end
+    return res
+end
