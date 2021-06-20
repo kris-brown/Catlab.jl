@@ -12,75 +12,136 @@ using DataStructures: IntDisjointSets
 WD = WiringDiagram{Any,Any,Any,Any}
 WDPair = Pair{WiringDiagram{Any,Any,Any,Any},
               WiringDiagram{Any,Any,Any,Any}}
+
+"""
+Pick a particular homomorphism specified by a partial assignment. Fails if
+this does not uniquely specify a particular homomorphism
+"""
+function constrained_homomorphism(
+    x::ACSet{CD},
+    y::ACSet{CD};
+    kw...
+    )::Union{Nothing,ACSetTransformation} where {CD}
+
+    function filt(h)::Bool
+        for (k, v) in collect(kw)
+            for (i, val) in enumerate(v)
+                if !(val===nothing) && h[k](i)!=val
+                    return false
+                end
+            end
+        end
+        return true
+    end
+    hs = filter(filt, homomorphisms(x,y))
+    nh = length(hs)
+    if 0==nh || nh > 1
+        @assert false "Constrained homomorphism found $nh matches"
+    else
+        return hs[1]
+    end
+
+end
 """
 Apply equality as a rewrite rule
 """
-function apply_eq(sc_cset::ACSet{CD}, Σ::Set{Box{Symbol}},
-                  rule::WDPair, forward::Bool=true)::ACSet{CD} where {CD}
-    l, r = forward ? (rule[1], rule[2]) : (rule[2], rule[1])
-    pat = wd_to_cospan(l, Σ)[2]
-    rem_IO!(pat)
-    m = homomorphism(pat, sc_cset)
-    if m === nothing
-        println("no match")
-        return sc_cset
+function apply_eq(sc_cset::ACSet{CD, AD}, Σ::Set{Box{Symbol}},
+                  rule::WDPair; forward::Bool=true, repl::Bool=false,
+                  partial::Vector{Pair{Int,Int}}=Pair{Int,Int}[]
+                 )::ACSet{CD} where {CD, AD}
+    # Orient the rule in the forward or reverse direction, determining which
+    # side of the rule is the "L" pattern in the DPO rewrite
+    l, r = map(wd_pad, forward ? (rule[1], rule[2]) : (rule[2], rule[1]))
+    _, pat, _, Lmap = wd_to_cospan(l, Σ)
+
+    # l is either replaced with merging of l and r or, or just r
+    r_ = repl ? r : branch(l, r)[1]
+    R_= wd_to_cospan(r_, Σ)[2]
+
+    # Store interface data and then erase it from CSets
+    vmap = Pair{Int,Int}[]
+    for i in 1:nparts(pat, :_I)
+        push!(vmap, pat[:_i][i] => R_[:_i][i])
     end
-    L_ = id(pat)
-    R_ = wd_to_cospan(branch2(l, r), Σ)[2]
+    for o in 1:nparts(R_, :_O)
+        push!(vmap, pat[:_o][o] => R_[:_o][o])
+    end
+    vmapset = sort(collect(Set(vmap)))
+
+    rem_IO!(pat)
     rem_IO!(R_)
-    Rs = homomorphisms(pat, R_)
-    @assert length(Rs) == 1
-    R = Rs[1] # this should be done cleaner
-    @assert dom(L_) == dom(R)
-    new_apex = rewrite_match(L_, R, m)
+    I = sigma_to_hyptype(Σ)[4]()
+    add_parts!(I, :V, length(vmapset))
+    L = ACSetTransformation(I, pat, V=[v[1] for v in vmapset])
+    R = ACSetTransformation(I, R_, V=[v[2] for v in vmapset])
+
+    # Construct match morphism
+    if isempty(partial)
+        m = homomorphism(pat, sc_cset)
+        if m === nothing
+            println("no match")
+            return sc_cset
+        end
+    else
+        pdict = Dict(partial)
+        vs = [get(pdict, i, nothing) for i in 1:nparts(pat, :V)]
+        m = constrained_homomorphism(pat, sc_cset, V=vs)
+    end
+
+    # # construct L, R morphisms
+    # if repl
+    # else
+    #     # The "R" pattern is a merging of both sides of rewrite rule, so
+    #     # interface is also equal to the "L" pattern.
+    #     L = id(pat)
+    #     # Map L into R
+    #     R = construct_cospan_homomorphism(pat, R_, Lmap, lrmap, Rmap, ccR)
+    # end
+    # println("n E_0_1 $(nparts(dom(L), :E_0_1))")
+    new_apex = rewrite_match(L, R, m)
     return new_apex
 end
 
+"""
+Remove the _I and _O components
+"""
 function rem_IO!(sc_cset::ACSet)::Nothing
     rem_parts!(sc_cset, :_I, 1:nparts(sc_cset,:_I))
     rem_parts!(sc_cset, :_O, 1:nparts(sc_cset,:_O))
 end
 
-function branch(Σ::Set{Box{Symbol}}, l::WD, r::WD)::ACSetTransformation
-    aptype, _, _, _ = sigma_to_hyptype(Σ);
-    cd, ad = aptype.body.body.parameters[1:2]
-    _, lcset = wd_to_cospan(l, Σ);
-    l_i, l_o = [deepcopy(lcset[x]) for x in [:_i,:_o]]
-    rem_IO!(lcset)
+"""
+Construct a cospan homomorphism from the following data:
 
-    comps = Dict([o=>collect(1:nparts(lcset, o)) for o in ob(cd)])
-    R = deepcopy(lcset);
-    _, rcset = wd_to_cospan(r, Σ);
-    r_i, r_o = [deepcopy(rcset[x]) for x in [:_i,:_o]]
-    newinds = Dict{Symbol, Vector{Int}}([:V=>Int[]])
-    for o in filter(!=(:V), ob(cd))
-        newinds[o] = add_parts!(R, o, nparts(rcset, o))
-    end
+WD₁  ↪  WD₂
+ ↟       ↟
+CSP₁ → CSP₂
 
-    for i in 1:nparts(rcset, :V)
-        leftind  = findfirst(==(i), r_i)
-        rightind = findfirst(==(i), r_o)
-        if !(leftind===nothing)
-            push!(newinds[:V], l_i[leftind])
-        elseif !(rightind===nothing)
-            push!(newinds[:V], l_o[rightind])
-        else
-            push!(newinds[:V], add_part!(R, :V))
+The maps from CSP to WD are effectively surjective because we keep track of the
+connected components in the WD.
+"""
+function construct_cospan_homomorphism(csp1::ACSet, csp2::ACSet,
+                                       cspwd1::Dict{Symbol, Vector{Int}},
+                                       wd1wd2::Vector{Int},
+                                       cspwd2::Dict{Symbol, Vector{Int}},
+                                       cc2::Dict{Int,Int}
+                                       )::ACSetTransformation
+    d = Dict{Symbol, Vector{Int}}()
+    for (k, map1) in collect(cspwd1)
+        mapping, map2 = Int[], [get(cc2, i, i) for i in cspwd2[k]]
+        for (i, csp1box) in enumerate(map1)
+            csp2box = wd1wd2[csp1box]
+            csp2box_canonical = get(cc2, csp2box, csp2box)
+            res = findfirst(==(csp2box_canonical), map2)
+            push!(mapping, res)
         end
+        d[k] = mapping
     end
-    for (src, tgt, h) in zip(dom(cd), codom(cd), hom(cd))
-        srcsym, tgtsym = ob(cd)[src], ob(cd)[tgt]
-        set_subpart!(R, newinds[srcsym], h, newinds[tgtsym][rcset[h]])
-    end
-    for (src, h) in zip(adom(ad),attr(ad))
-        srcsym = ob(cd)[src]
-        set_subpart!(R, newinds[srcsym], h, rcset[h])
-    end
-    return ACSetTransformation(deepcopy(lcset), R; comps...)
+    return ACSetTransformation(csp1, csp2; d...)
 end
 
-function branch2(l::WD, r::WD)::WD
-    ld = l.diagram
+function branch(l::WD, r::WD)::Tuple{WD, Vector{Int}, Vector{Int}}
+    ld, rd = l.diagram, r.diagram
     nin, nout = [nparts(ld, x) for x in [:OuterInPort, :OuterOutPort]]
     res = WiringDiagram(noth(nin), noth(nout))
     inboxes = [add_box!(res, δ) for _ in 1:nin]
@@ -100,28 +161,34 @@ function branch2(l::WD, r::WD)::WD
             (b2, i) => (outboxes[i], 2)])
     end
     subboxes = [repeat([δsd], nin)...,repeat([μsd], nout)..., l, r]
-    println("subbox length $(length(subboxes))")
-    return ocompose(res, subboxes)
+    start = nin+nout
+    lb, rb = [nparts(x, :Box) for x in [ld, rd]]
+    lboxrange = collect(start+1:start+lb)
+    rboxrange = collect(start+lb+1:start+lb+rb)
+    return ocompose(res, subboxes), lboxrange, rboxrange
 end
 
 """
 Prove an inequality in a relational theory
 Return homomorphism as witness, if any
-Takes in wiring diagram csets c1 and c2
+Takes in set of generators Σ, equations I, wiring diagram csets c1 and c2.
+If oriented, then rewrites are only applied in the forward direction.
 """
-function prove(Σ::Set{Box{Symbol}}, I::Set{WDPair} , c1::WD, c2::WD)::Union{Nothing, Any}
-    _, d1 = wd_to_cospan(c1, Σ)
-    _, d2 = wd_to_cospan(c2, Σ)
+function prove(Σ::Set{Box{Symbol}}, I::Set{WDPair}, c1::WD, c2::WD;
+               n::Int=3, oriented::Bool=false)::Union{Nothing, Any}
+    d1 = wd_to_cospan(c1, Σ)[2]
+    d2 = wd_to_cospan(c2, Σ)[2]
 
-    for _ in 1:5
+    for _ in 1:n
         h = homomorphism(d2, d1)
         if !(h===nothing)
             return h
         else
-            for i in I
-                println("i= $i")
-                d1 = apply_eq(d1, Σ, i)
-                # d1 = apply_eq(d1, Σ, i, false)
+            for eq in I
+                d1 = apply_eq(d1, Σ, eq)
+                if !oriented # apply both rewrite rules
+                    d1 = apply_eq(d1, Σ, eq, false)
+                end
             end
         end
     end
@@ -210,8 +277,8 @@ end
 
 
 """
-Add a empty node between each generator and the outerbox
-and a node between each generator
+Add a empty node between each generator and the outerbox and a node between each
+generator. This should be an idempotent function. (todo: add tests for this)
 """
 function wd_pad(sd::WD)::WD
     sd = deepcopy(sd)
@@ -221,16 +288,27 @@ function wd_pad(sd::WD)::WD
     portboxes = [:in_port_box, :out_port_box]
     deletes = [in_delete, out_delete]
     extsrctgt = [(:in_src, :in_tgt), (:out_src, :out_tgt)]
-    for (portbox, extwire, delset, (extsrc, exttgt), out) in zip(portboxes, extwires, deletes, extsrctgt, [false, true])
-        for (ow, (os, ot, _)) in enumerate(d.tables[extwire])
-            if !(d[:value][d[portbox][os]] === nothing)
-                newbox = add_part!(d, :Box, value=nothing, box_type=Box{Nothing})
-                new_in = add_part!(d, :InPort, in_port_box=newbox, in_port_type=nothing)
-                new_out = add_part!(d, :OutPort, out_port_box=newbox, out_port_type=nothing)
-                xsrc, xtgt, src, tgt = out ? (new_out, ot, os, new_in) : (os, new_in, new_out, ot)
-                add_part!(d, extwire; Dict([extsrc => xsrc, exttgt => xtgt])...)
-                add_part!(d, :Wire, src=src, tgt=tgt, wire_value=nothing)
-                push!(delset, ow)
+    # zipdata = zip(portboxes, extwires, deletes, extsrctgt, [false, true])
+    for (i,j) in [(1,2),(2,1)] # (portbox, extwire, delset, (extsrc, exttgt), out) in zipdata
+        extwire = extwires[i]
+        portbox = portboxes[i]
+        extsrc, exttgt = extsrctgt[i]
+        for (outwire_id, extwire_data) in enumerate(d.tables[extwire])
+            extport, innerport = collect(extwire_data)[[i,j]]
+            if !(d[:value][d[portbox][innerport]] === nothing)
+                newbox = add_part!(d, :Box, value=nothing,
+                                   box_type=Box{Nothing})
+                new_in = add_part!(d, :InPort, in_port_box=newbox,
+                                   in_port_type=nothing)
+                new_out = add_part!(d, :OutPort, out_port_box=newbox,
+                                    out_port_type=nothing)
+                extin = [extport, new_out]
+                extout = [new_in, extport]
+                insrc = [new_out, innerport]
+                intgt = [innerport, new_in]
+                add_part!(d, extwire; Dict([extsrc => extin[i], exttgt => extout[i]])...)
+                add_part!(d, :Wire, src=insrc[i], tgt=intgt[i], wire_value=nothing)
+                push!(deletes[i], outwire_id)
             end
         end
     end
@@ -256,15 +334,21 @@ end
 
 """
 Convert wiring diagram to cospan
-All components connected by Frobenius generators are condensed
-together.
+All components connected by Frobenius generators are condensed together.
 """
-function wd_to_cospan(sd, Σ::Set{Box{Symbol}})
+function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
+                     )::Tuple{StructuredCospan, ACSet, Dict{Int,Int},
+                              Dict{Symbol,Vector{Int}}}
     sd = wd_pad(sd)
     d = sd.diagram
     aptype, _, sctype, sccsettype = sigma_to_hyptype(Σ)
 
+    # For each component in apex, keep track of which box each part comes from
+    mapping = Dict([sym => Int[] for sym in ob(aptype.body.body.parameters[1])])
+
+    # Isolate box indices that correspond to Frobenius nodes
     nodes = [i for (i, v) in enumerate(d[:value]) if v===nothing]
+    # Determine connected components by iterating over all wires
     conn_comps = IntDisjointSets(nparts(d, :Box))
     for (srcport, tgtport, _) in d.tables[:Wire]
         srcbox, tgtbox = d[:out_port_box][srcport], d[:in_port_box][tgtport]
@@ -272,11 +356,19 @@ function wd_to_cospan(sd, Σ::Set{Box{Symbol}})
             union!(conn_comps, srcbox, tgtbox)
         end
     end
-    hs = i -> hypsyms(length(inneighbors(sd, i)), length(outneighbors(sd, i)))
-    n = conn_comps.ngroups - (nparts(d, :Box) - length(nodes))
-    cclist = sort(collect(Set([conn_comps.parents[i] for i in nodes])))
-    vert_dict = Dict([i=>findfirst(==(conn_comps.parents[i]), cclist) for i in nodes])
 
+    # Get hyperedge-specific info given a box index
+    hs = i -> hypsyms(length(inneighbors(sd, i)), length(outneighbors(sd, i)))
+
+    # Total # of connected components
+    n = conn_comps.ngroups - (nparts(d, :Box) - length(nodes))
+
+    # Representative box index for each connected component
+    cclist = sort(collect(Set([conn_comps.parents[i] for i in nodes])))
+    mapping[:V] = cclist
+    # Map each boxid (that is Frobenius) to boxid that is its representative
+    vert_dict = Dict([i=>findfirst(==(conn_comps.parents[i]), cclist)
+                      for i in nodes])
     apx = aptype()
     add_parts!(apx, :V, n)
     box_dict = Dict{Int,Int}()
@@ -285,6 +377,7 @@ function wd_to_cospan(sd, Σ::Set{Box{Symbol}})
             etype, lab, _, _ = hs(box)
             eind = add_part!(apx, etype; Dict([lab => val])...)
             box_dict[box] = eind
+            push!(mapping[etype], box)
         end
     end
 
@@ -292,26 +385,39 @@ function wd_to_cospan(sd, Σ::Set{Box{Symbol}})
         srcbox, tgtbox = d[:out_port_box][srcport], d[:in_port_box][tgtport]
         if !(srcbox in nodes && tgtbox in nodes)
             if srcbox in nodes || tgtbox in nodes
-                vert, hypedge, hypport = srcbox in nodes ? (srcbox, tgtbox, tgtport) : (tgtbox, srcbox, srcport)
+                # true if wire is vert -> hyperedge, false if hyperedge -> vert
+                srcnode = srcbox in nodes
+                vert, hypedge, hypport = (srcnode
+                                            ? (srcbox, tgtbox, tgtport)
+                                            : (tgtbox, srcbox, srcport))
+
                 _, _, ins, outs = hs(hypedge)
-                box_ind = box_dict[hypedge]
-                part = srcbox in nodes ? ins : outs
-                porttype = srcbox in nodes ? :InPort : :OutPort
-                portbtype = srcbox in nodes ? :in_port_box : :out_port_box
-                boxports = [i for i in 1:nparts(d, porttype) if d[portbtype][i] == hypedge]
+
+                part, porttype, portbtype = (srcnode
+                                              ? (ins, :InPort, :in_port_box)
+                                              : (outs, :OutPort, :out_port_box))
+                boxports = [i for i in 1:nparts(d, porttype)
+                            if d[portbtype][i] == hypedge]
                 port_ind = findfirst(==(hypport), boxports)
+
+                box_ind = box_dict[hypedge]
+
                 set_subpart!(apx, box_ind, part[port_ind], vert_dict[vert])
             else
             end
         end
     end
 
-    indata = sort([i=>d[:in_port_box][t] for (i,t,_) in d.tables[:InWire]]) # (InSrc,InTgt)
-    outdata = sort([i=>d[:out_port_box][t] for (t,i,_) in d.tables[:OutWire]]) # (InSrc,InTgt)
-    lft = FinFunction([vert_dict[i[2]] for i in indata],n)
-    rght = FinFunction([vert_dict[i[2]] for i in outdata],n)
+    # Assemble structured cospan legs
+    indata  = sort([i=>d[:in_port_box][t]  for (i,t,_) in d.tables[:InWire]])
+    outdata = sort([i=>d[:out_port_box][t] for (t,i,_) in d.tables[:OutWire]])
+    lft = FinFunction(Int[vert_dict[i[2]] for i in indata],n)
+    rght = FinFunction(Int[vert_dict[i[2]] for i in outdata],n)
+
+    # assemble StructuredCospan
     sc = sctype(apx, lft, rght)
 
+    # Copy over apex data to ACSet representing entering s.c. structure
     cset = sccsettype()
     cd, ad = aptype.body.body.parameters[1:2]
     for o in ob(cd)
@@ -320,12 +426,14 @@ function wd_to_cospan(sd, Σ::Set{Box{Symbol}})
     for h in [hom(cd)..., attr(ad)...]
         set_subpart!(cset, h, apx[h])
     end
+
+    # Represent leg data within the acset
     add_parts!(cset, :_I, length(indata))
     add_parts!(cset, :_O, length(outdata))
     set_subpart!(cset, :_i, collect(lft))
     set_subpart!(cset, :_o, collect(rght))
 
-    return sc, cset
+    return sc, cset, vert_dict, mapping
 end
 
 function cospan_to_wd(csp::ACSet{CD})::WD where{CD}
@@ -368,7 +476,7 @@ function cospan_to_wd(csp::ACSet{CD})::WD where{CD}
             end
         end
         # b = add_box!(res, Box(noth(length(v_in)), noth(length(v_out))))
-        b = add_box!(res, Box(noth(1), noth(1)))
+        b = add_box!(res, Junction(nothing, 1, 1))# Box(noth(1), noth(1)))  # add junction???
 
         for (ind, (v_i, port)) in enumerate(v_in)
             src = v_i < 0 ? (input_id(res),-v_i) : (v_i, port)
