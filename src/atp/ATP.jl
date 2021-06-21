@@ -142,18 +142,28 @@ function invert(x::ACSetTransformation)::ACSetTransformation
     return ACSetTransformation(codom(x), dom(x); d...)
 end
 
-noth = n -> collect(repeat([nothing], n))
-δsd, μsd = WiringDiagram(noth(1), noth(2)), WiringDiagram(noth(2),noth(1))
-add_box!(δsd, Box(noth(1),noth(2)))
-add_box!(μsd, Box(noth(2),noth(1)))
-add_wires!(δsd, Pair[
-    (input_id(δsd), 1) => (1,1),
-    (1,1) => (output_id(δsd), 1),
-    (1,2) => (output_id(δsd), 2)])
-add_wires!(μsd, Pair[
-    (input_id(μsd), 1) => (1,1),
-    (input_id(μsd), 2) => (1,2),
-    (1,1) => (output_id(μsd), 1)])
+δ_box(x::Symbol) = Box(nothing, [x], [x,x])
+μ_box(x::Symbol) = Box(nothing, [x,x], [x])
+
+function δsd(x::Symbol)::WD
+    wd = WiringDiagram([x], [x,x])
+    add_box!(wd, δ_box(x))
+    add_wires!(wd, Pair[
+        (input_id(wd), 1) => (1,1),
+        (1,1) => (output_id(wd), 1),
+        (1,2) => (output_id(wd), 2)])
+    return wd
+end
+
+function μsd(x::Symbol)
+    wd = WiringDiagram([x,x],[x])
+    add_box!(wd, μ_box(x))
+    add_wires!(wd, Pair[
+        (input_id(wd), 1) => (1,1),
+        (input_id(wd), 2) => (1,2),
+        (1,1) => (output_id(wd), 1)])
+    return wd
+end
 
 """
 Apply equality as a rewrite rule
@@ -264,10 +274,11 @@ end
 function branch(l::WD, r::WD)# ::WD
     ld, rd = l.diagram, r.diagram
     nin, nout = [nparts(ld, x) for x in [:OuterInPort, :OuterOutPort]]
-    res = WiringDiagram(noth(nin), noth(nout))
-    inboxes = [add_box!(res, δ) for _ in 1:nin]
-    outboxes = [add_box!(res, μ) for _ in 1:nout]
-    subbox = Box(noth(nin), noth(nout))
+    intypes, outtypes = ld[:outer_in_port_type], ld[:outer_out_port_type]
+    res = WiringDiagram(intypes, outtypes)
+    inboxes = [add_box!(res, δ_box(s)) for s in intypes]
+    outboxes = [add_box!(res, μ_box(s)) for s in outtypes]
+    subbox = Box(intypes, outtypes)
     b1, b2 = [add_box!(res, subbox) for _ in 1:2]
     for i in 1:nin
         add_wires!(res, Pair[
@@ -281,7 +292,8 @@ function branch(l::WD, r::WD)# ::WD
             (b1, i) => (outboxes[i], 1),
             (b2, i) => (outboxes[i], 2)])
     end
-    subboxes = [repeat([δsd], nin)...,repeat([μsd], nout)..., l, r]
+    subboxes = [[δsd(s) for s in intypes]...,
+                [μsd(s) for s in outtypes]..., l, r]
     start = nin+nout
     lb, rb = [nparts(x, :Box) for x in [ld, rd]]
     lboxrange = collect(start+1:start+lb)
@@ -348,6 +360,8 @@ function sigma_to_hyptype(Σ::Set{Box{Symbol}})
     end
 
     v = xobs[1]
+    add_generator!(pres, FreeSchema.Attr{:generator}([:color, xobs[1], name], [xobs[1], name]))
+
     for (n, (i, o)) in enumerate(keys(arities))
         x = xobs[n+1]
         add_generator!(pres, FreeSchema.Attr{:generator}([Symbol("l_$(i)_$o"), x, name], [x, name]))
@@ -392,22 +406,23 @@ function wd_pad(sd::WD)::WD
     in_delete, out_delete = Set{Int}(), Set{Int}()
     extwires = [:InWire, :OutWire]
     portboxes = [:in_port_box, :out_port_box]
+    exttypes = [:outer_in_port_type, :outer_out_port_type]
     deletes = [in_delete, out_delete]
     extsrctgt = [(:in_src, :in_tgt), (:out_src, :out_tgt)]
-    # zipdata = zip(portboxes, extwires, deletes, extsrctgt, [false, true])
-    for (i,j) in [(1,2),(2,1)] # (portbox, extwire, delset, (extsrc, exttgt), out) in zipdata
+    for (i,j) in [(1,2),(2,1)]
         extwire = extwires[i]
         portbox = portboxes[i]
         extsrc, exttgt = extsrctgt[i]
         for (outwire_id, extwire_data) in enumerate(d.tables[extwire])
             extport, innerport = collect(extwire_data)[[i,j]]
             if !(d[:value][d[portbox][innerport]] === nothing)
+                exttype = d[exttypes[i]][extport]
                 newbox = add_part!(d, :Box, value=nothing,
                                    box_type=Box{Nothing})
                 new_in = add_part!(d, :InPort, in_port_box=newbox,
-                                   in_port_type=nothing)
+                                   in_port_type=exttype)
                 new_out = add_part!(d, :OutPort, out_port_box=newbox,
-                                    out_port_type=nothing)
+                                    out_port_type=exttype)
                 extin = [extport, new_out]
                 extout = [new_in, extport]
                 insrc = [new_out, innerport]
@@ -423,9 +438,10 @@ function wd_pad(sd::WD)::WD
         s_box = d[:out_port_box][s_port]
         t_box = d[:in_port_box][t_port]
         if !(d[:value][s_box] === nothing ||  d[:value][t_box] === nothing)
+            s_typ, t_typ = d[:out_port_type][s_port], d[:in_port_type][t_port]
             newbox = add_part!(d, :Box, value=nothing, box_type=Box{Nothing})
-            new_in = add_part!(d, :InPort, in_port_box=newbox, in_port_type=nothing)
-            new_out = add_part!(d, :OutPort, out_port_box=newbox, out_port_type=nothing)
+            new_in = add_part!(d, :InPort, in_port_box=newbox, in_port_type=s_typ)
+            new_out = add_part!(d, :OutPort, out_port_box=newbox, out_port_type=t_typ)
             add_part!(d, :Wire, src=s_port, tgt=new_in, wire_value=nothing)
             add_part!(d, :Wire, src=new_out, tgt=t_port, wire_value=nothing)
             push!(w_delete, w)
@@ -458,7 +474,7 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
     for (srcport, tgtport, _) in d.tables[:Wire]
         srcbox, tgtbox = d[:out_port_box][srcport], d[:in_port_box][tgtport]
         if srcbox in nodes && tgtbox in nodes
-            new_root = union!(conn_comps, srcbox, tgtbox)
+            union!(conn_comps, srcbox, tgtbox)
         end
     end
 
@@ -467,6 +483,8 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
 
     # Total # of connected components
     n = conn_comps.ngroups - (nparts(d, :Box) - length(nodes))
+    nodetypes = Union{Nothing, Symbol}[nothing for _ in 1:n]
+
     # Representative box index for each connected component
     cclist = sort(collect(Set([find_root(conn_comps,i) for i in nodes])))
 
@@ -492,9 +510,19 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
             if srcbox in nodes || tgtbox in nodes
                 # true if wire is vert -> hyperedge, false if hyperedge -> vert
                 srcnode = srcbox in nodes
-                vert, hypedge, hypport = (srcnode
+                vert, hypedge, hypport, = (srcnode
                                             ? (srcbox, tgtbox, tgtport)
                                             : (tgtbox, srcbox, srcport))
+
+                typ1 = d[:out_port_type][srcport]
+                typ2 = d[:in_port_type][tgtport]
+                err = "inconsistent ports $srcport ($typ1) -> $tgtport ($typ2)"
+                typ1 == typ2 || error(err)
+                prevtyp = nodetypes[vert_dict[vert]]
+                if !(prevtyp === nothing)
+                    prevtyp == typ1 || error("inconsistent types")
+                end
+                nodetypes[vert_dict[vert]] = typ1
 
                 _, _, ins, outs = hs(hypedge)
 
@@ -517,6 +545,16 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
     outdata = sort([i=>d[:out_port_box][t] for (t,i,_) in d.tables[:OutWire]])
     lft = FinFunction(Int[vert_dict[i[2]] for i in indata],n)
     rght = FinFunction(Int[vert_dict[i[2]] for i in outdata],n)
+
+    for (v, c) in [zip(collect(lft), d[:outer_in_port_type])...,
+                   zip(collect(rght), d[:outer_out_port_type])...]
+        prevtyp = nodetypes[v]
+        if !(prevtyp === nothing)
+            prevtyp == c || error("inconsistent types")
+        end
+        nodetypes[v] = c
+    end
+    set_subpart!(apx, :color, nodetypes)
 
     # assemble StructuredCospan
     sc = sctype(apx, lft, rght)
@@ -543,17 +581,21 @@ end
 function cospan_to_wd(csp::ACSet{CD})::WD where{CD}
     obs = ob(CD)
     nin, nout = [nparts(csp, x) for x in [:_I, :_O]]
-    res = WiringDiagram(noth(nin), noth(nout))
+    intypes, outtypes = repeat([nothing], nin), repeat([nothing], nout)
+
+    res = WiringDiagram(intypes, outtypes)
 
     boxdict = Dict()
-    for o in obs[2:end-2] # skip V _I and _O
+    for o in obs[2:end-2] # skip V, _I, and _O
         _, o_nin_, o_nout_ = Base.split(string(o), "_")
         o_nin, o_nout = [parse(Int, x) for x in [o_nin_, o_nout_]]
+        o_intypes, o_outtypes = repeat([nothing], o_nin), repeat([nothing], o_nout)
+
         lab = Symbol("l_$(o_nin)_$o_nout")
         arity = o_nin => o_nout
         boxdict[arity] = Int[]
         for j in 1:nparts(csp, o)
-            bx = Box(csp[lab][j], noth(o_nin), noth(o_nout))
+            bx = Box(csp[lab][j], o_intypes, o_outtypes)
             push!(boxdict[arity], add_box!(res, bx))
         end
     end
@@ -579,16 +621,15 @@ function cospan_to_wd(csp::ACSet{CD})::WD where{CD}
                 end
             end
         end
-        # b = add_box!(res, Box(noth(length(v_in)), noth(length(v_out))))
-        b = add_box!(res, Junction(nothing, 1, 1))# Box(noth(1), noth(1)))  # add junction???
+        b = add_box!(res, Junction(nothing, 1, 1))
 
-        for (ind, (v_i, port)) in enumerate(v_in)
+        for (_, (v_i, port)) in enumerate(v_in)
             src = v_i < 0 ? (input_id(res),-v_i) : (v_i, port)
-            add_wire!(res, src => (b,1)) # replace 1 w/ ind to have distinct ports
+            add_wire!(res, src => (b, 1)) # replace 1 w/ indx for distinct ports
         end
-        for (ind, (v_o, port)) in enumerate(v_out)
+        for (_, (v_o, port)) in enumerate(v_out)
             tgt = v_o < 0 ?  (output_id(res),-v_o) : (v_o, port)
-            add_wire!(res, (b,1) => tgt) # see above
+            add_wire!(res, (b, 1) => tgt) # see above
         end
     end
     return res
@@ -606,7 +647,10 @@ function label(wd::WD;
         return x[1] isa String ? x : [get(Dict(x), i, nothing) 
                                    for i in 1:nparts(d, s)]
     end
-
+    set_subpart!(d, :in_port_type, repeat([nothing], nparts(d, :InPort)))
+    set_subpart!(d, :out_port_type, repeat([nothing], nparts(d, :OutPort)))
+    set_subpart!(d, :outer_in_port_type, repeat([nothing], nparts(d, :InWire)))
+    
     if !isempty(w)
         v = to_vec(w, :Wire)
         for (i, val) in enumerate(v)
