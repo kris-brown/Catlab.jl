@@ -83,9 +83,9 @@ function to_graphviz(f::WiringDiagram;
     port_size::String="24", junction_size::String="0.05",
     outer_ports::Bool=true, anchor_outer_ports::Bool=true,
     graph_attrs::AbstractDict=Dict(), node_attrs::AbstractDict=Dict(),
-    edge_attrs::AbstractDict=Dict(), cell_attrs::AbstractDict=Dict())::Graphviz.Graph
+    edge_attrs::AbstractDict=Dict(), cell_attrs::AbstractDict=Dict(),
+    junction_colors::AbstractDict=Dict())::Graphviz.Graph
   @assert label_attr in (:label, :xlabel, :headlabel, :taillabel)
-
   # State variables.
   stmts = Graphviz.Statement[]
   port_map = Dict{Port,Graphviz.NodeID}()
@@ -94,7 +94,7 @@ function to_graphviz(f::WiringDiagram;
       port_map[Port(v,kind,i)] = node_id
     end
   end
-  
+
   # Invisible nodes for incoming and outgoing wires.
   if outer_ports
     gv_box = graphviz_outer_box(f;
@@ -103,19 +103,20 @@ function to_graphviz(f::WiringDiagram;
     update_port_map!(input_id(f), OutputPort, gv_box.input_ports)
     update_port_map!(output_id(f), InputPort, gv_box.output_ports)
   end
-  
+
   # Visible nodes for boxes.
   default_attrs = default_directed_graphviz_attrs
   cell_attrs = merge(default_attrs.cell, Graphviz.as_attributes(cell_attrs))
   for v in box_ids(f)
     gv_box = graphviz_box(box(f,v), box_id([v]),
       orientation=orientation, labels=node_labels, port_size=port_size,
-      junction_size=junction_size, cell_attrs=cell_attrs)
+      junction_size=junction_size, cell_attrs=cell_attrs,
+      junction_colors=junction_colors)
     append!(stmts, gv_box.stmts)
     update_port_map!(v, InputPort, gv_box.input_ports)
     update_port_map!(v, OutputPort, gv_box.output_ports)
   end
-  
+
   # Edges.
   for (i, wire) in enumerate(wires(f))
     source, target = wire.source, wire.target
@@ -138,7 +139,7 @@ function to_graphviz(f::WiringDiagram;
     edge = Graphviz.Edge(port_map[source], port_map[target]; attrs...)
     push!(stmts, edge)
   end
-  
+
   # Graph.
   Graphviz.Digraph(graph_name, stmts; prog="dot",
     graph_attrs=merge(default_attrs.graph, Graphviz.as_attributes(graph_attrs),
@@ -172,7 +173,7 @@ function graphviz_box(box::AbstractBox, node_id;
     comment = node_label(box.value),
     label = html_label,
   )
-  
+
   # Input and output ports.
   graphviz_port = (kind::PortKind, port::Int) -> begin
     Graphviz.NodeID(node_id, port_name(kind, port),
@@ -180,20 +181,20 @@ function graphviz_box(box::AbstractBox, node_id;
   end
   inputs = [ graphviz_port(InputPort, i) for i in 1:nin ]
   outputs = [ graphviz_port(OutputPort, i) for i in 1:nout ]
-  
+
   GraphvizBox([node], inputs, outputs)
 end
 
 """ Graphviz box for a junction.
 """
 function graphviz_box(junction::Junction, node_id;
-    junction_size::String="0", kw...)
+    junction_size::String="0", junction_colors::AbstractDict=Dict(), kw...)
   graphviz_junction(junction, node_id;
     comment = "junction",
     label = "",
     shape = "circle",
     style = "filled",
-    fillcolor = "black",
+    fillcolor = get(junction_colors,  junction.value, "black"),
     width = junction_size,
     height = junction_size,
   )
@@ -278,7 +279,7 @@ function graphviz_outer_box(f::WiringDiagram;
     push!(stmts, graphviz_outer_ports(OutputPort, noutputs;
       anchor=anchor, orientation=orientation))
   end
-  
+
   # Input and output ports.
   inputs = map(1:ninputs) do i
     Graphviz.NodeID(port_node_name(InputPort, i),
@@ -288,7 +289,7 @@ function graphviz_outer_box(f::WiringDiagram;
     Graphviz.NodeID(port_node_name(OutputPort, i),
                     port_anchor(InputPort, orientation))
   end
-  
+
   GraphvizBox(stmts, inputs, outputs)
 end
 
@@ -471,7 +472,7 @@ function to_graphviz_property_graph(d::UndirectedWiringDiagram;
       end
     end
   end
-  
+
   return graph
 end
 
@@ -530,7 +531,7 @@ function graphviz_layout(diagram::WiringDiagram, graph::PropertyGraph)
   bounds, pad = get_gprop(graph, :bounds), get_gprop(graph, :pad)
   diagram_size = bounds + 2*pad
   transform_point(p) = SVector(1,-1) .* (p - diagram_size/2)
-  
+
   # Assumes vertices are in same order as created by `to_graphviz`:
   # 1. Input ports of outer box
   nin, nout = length(input_ports(diagram)), length(output_ports(diagram))
@@ -540,14 +541,14 @@ function graphviz_layout(diagram::WiringDiagram, graph::PropertyGraph)
     pos = transform_point(attrs[:position])
     PortLayout(; value=value, position=pos, normal=-main_dir)
   end
-  
+
   # 2. Output ports of outer box
   outputs = map(enumerate(output_ports(diagram))) do (i, value)
     attrs = vprops(graph, nin + i)
     pos = transform_point(attrs[:position])
     PortLayout(; value=value, position=pos, normal=main_dir)
   end
-  
+
   # 3. Inner boxes
   # TODO: Use port positions from Graphviz layout. Obtain these from either
   # the HTML label or, more likely, an incident edge.
@@ -564,9 +565,9 @@ function graphviz_layout(diagram::WiringDiagram, graph::PropertyGraph)
       BoxLayout(; value=box.value, shape=shape, position=pos, size=size),
       layout_linear_ports(InputPort, input_ports(box), size, orientation),
       layout_linear_ports(OutputPort, output_ports(box), size, orientation)
-    ))    
+    ))
   end
-  
+
   # Add wires using spline points from Graphviz edge layout.
   function map_port(node::Int, portname::Union{String,Nothing})
     if node <= nin
@@ -597,11 +598,11 @@ function graphviz_layout(diagram::WiringDiagram, graph::PropertyGraph)
   layout
 end
 
-""" Lay out ports linearly, equispaced along a rectangular box. 
+""" Lay out ports linearly, equispaced along a rectangular box.
 
 FIXME: Should this be in `WiringDiagramLayouts` as an alternative layout method?
 """
-function layout_linear_ports(port_kind::PortKind, port_values::Vector, 
+function layout_linear_ports(port_kind::PortKind, port_values::Vector,
                              box_size::StaticVector{2}, orientation::LayoutOrientation)
   n = length(port_values)
   sign = port_sign(port_kind, orientation)

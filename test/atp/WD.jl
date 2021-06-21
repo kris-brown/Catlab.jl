@@ -308,6 +308,63 @@ add_wires!(ex211b, Pair[
     (b3,1)                => (output_id(ex211b), 3),
     (b4,1)                => (output_id(ex211b), 4)]);
 
+refls_1 = WiringDiagram([:O], [:O])
+idbox, sbox = add_boxes!(refls_1, [Id, s]);
+add_wires!(refls_1, Pair[
+    (input_id(refls_1), 1) => (idbox, 1),
+    (idbox, 1)             => (sbox, 1),
+    (sbox, 1)              => (output_id(refls_1), 1)]);
+
+reflt_1 = WiringDiagram([:O], [:O])
+idbox, tbox = add_boxes!(reflt_1, [Id, t]);
+add_wires!(reflt_1, Pair[
+    (input_id(reflt_1), 1) => (idbox, 1),
+    (idbox, 1)             => (tbox, 1),
+    (tbox, 1)              => (output_id(reflt_1), 1)]);
+
+o1 = WiringDiagram([:O], [:O])
+dotbox = add_box!(o1, dot(:O));
+add_wires!(o1, Pair[
+    (input_id(o1), 1) => (dotbox, 1),
+    (dotbox, 1)       => (output_id(o1), 1)]);
+
+cmp_1 = WiringDiagram([:A, :A], [])
+δ1, δ2, μbox, ϵ1, ϵ2, ϵ3, s1, s2, t1, t2 = add_boxes!(cmp_1, [
+    δ(:A), δ(:A), μ(:O), ϵ(:O), ϵ(:O), ϵ(:O), s, s, t ,t]);
+add_wires!(cmp_1, Pair[
+    (input_id(cmp_1), 1) => (δ1, 1),
+    (input_id(cmp_1), 2) => (δ2, 1),
+    (δ1, 1)       =>  (s1,1),
+    (δ1, 2)       =>  (t1,1),
+    (δ2, 1)       =>  (s2,1),
+    (δ2, 2)       =>  (t2,1),
+    (t1, 1) => (μbox, 1),
+    (s2, 1) => (μbox, 2),
+    (μbox, 1) => (ϵ2, 1),
+    (s1, 1) => (ϵ1, 1),
+    (t2, 1) => (ϵ3, 1),]);
+
+cmp_2 = WiringDiagram([:A, :A], [])
+c, s1, s2, t1, t2, δ1, δ2,δ3, μ1, μ2, ϵ1, ϵ2 = add_boxes!(cmp_2, [
+    cmp, s, s, t ,t, δ(:A), δ(:A), δ(:A), μ(:O), μ(:O), ϵ(:O), ϵ(:O),]);
+add_wires!(cmp_2, Pair[
+    (input_id(cmp_1), 1) => (δ1, 1),
+    (input_id(cmp_1), 2) => (δ2, 1),
+    (δ1, 1)              => (s1, 1),
+    (δ1, 2)              => (c,  1),
+    (δ2, 1)              => (c,  2),
+    (δ2, 2)              => (t1, 1),
+    (c,  1)              => (δ3, 1),
+    (δ3, 1)              => (s2, 1),
+    (δ3, 2)              => (t2, 1),
+    (s1, 1)              => (μ1, 1),
+    (s2, 1)              => (μ1, 2),
+    (t1, 1)              => (μ2, 1),
+    (t2, 1)              => (μ2, 2),
+    (μ1, 1)              => (ϵ1, 1),
+    (μ2, 1)              => (ϵ2, 1)])
+
+
 # Equations
 mul        = Eq(:mul,        mul_1,        mul_2,        false);
 mul_assoc  = Eq(:assoc,      mul_assoc_1,  mul_assoc_2,  true);
@@ -321,14 +378,18 @@ gdiv       = Eq(:gdiv,       div_1,        div_2,        true);
 leftcancel = Eq(:leftcancel, leftcancel_1, leftcancel_2, true);
 s_order_2  = Eq(:s_ord_2, ss, e_wd, true);
 r_order_3  = Eq(:r_ord_3, rrr, e_wd, true);
-
-
+refls      = Eq(:refls, refls_1, o1, true);
+reflt      = Eq(:reflt, reflt_1, o1, true);
+cmp_intro  = Eq(:cmp,   cmp_1, cmp_2, false);
 # Equation sets
 I_monoid = Set([mul_assoc, leftid, rightid, mul]);
 I_group  = Set([leftinv, rightinv]);
 I_d3h    = Set([s_order_2, r_order_3]);
-
+I_reflG  = Set([refls, reflt])
+I_cat    = Set{Eq}() # TODO associativity of cmp
 # Theories
 T_monoid = EqTheory(Σ_monoid, I_monoid);
 T_group  = union(T_monoid, Σ_group, I_group)
 T_d3h    = union(T_group, Σ_dihedral, I_d3h);
+T_reflG  = EqTheory(Σ_reflG, I_reflG)
+T_cat    = union(T_reflG, Σ_cat, I_cat)

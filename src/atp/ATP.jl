@@ -40,8 +40,12 @@ function check_wd(wd::WD)::Bool
             b &= sort([ewlen[port], wlen[port]]) == [0, 1]
         end
     end
-return b
+    # to-do, check typing of ports is consistent
+    # all boxes with "nothing" symbol must have same type for all in/outports
+    # external port types must match internal ports they're connected to
+    return b
 end
+
 @auto_hash_equals struct Eq
     name::Symbol
     l::WD
@@ -60,7 +64,7 @@ end
 
 function Base.isless(x::Eq, y::Eq)::Bool
     return Base.isless(x.name, y.name)
-end 
+end
 
 struct EqTheory
     gens :: Set{Box{Symbol}}
@@ -155,7 +159,7 @@ function δsd(x::Symbol)::WD
     return wd
 end
 
-function μsd(x::Symbol)
+function μsd(x::Symbol)::WD
     wd = WiringDiagram([x,x],[x])
     add_box!(wd, μ_box(x))
     add_wires!(wd, Pair[
@@ -333,16 +337,16 @@ end
 
 
 """
-Given a signature, create an OpenCSetType for hypergraphs
-including a distinct hyperedge for each arity.
+Given a signature, create an OpenCSetType for hypergraphs including a distinct
+hyperedge for each arity (distinguished by # and type of in/outputs).
 
-Also return a specific ACSet HΣ for the signature, to be
-in making a slice category.
+TODO: return a specific ACSet HΣ for the signature, where being homomorphic to
+HΣ means that a diagram satisfies the signature.
 """
 function sigma_to_hyptype(Σ::Set{Box{Symbol}})
-    arities = Dict{Pair{Int}, Set{Symbol}}()
+    arities = Dict{Pair{Vector{Symbol}, Vector{Symbol}}, Set{Symbol}}()
     for op in Σ
-        ar = length(op.input_ports) => length(op.output_ports)
+        ar = op.input_ports => op.output_ports
         if haskey(arities, ar)
             push!(arities[ar], op.value)
         else
@@ -352,7 +356,10 @@ function sigma_to_hyptype(Σ::Set{Box{Symbol}})
     pres = Presentation(FreeSchema)
     name = FreeSchema.Data{:generator}([:Name], [])
     add_generator!(pres, name)
-    obsyms = vcat([:V], [Symbol("E_$(i)_$j") for (i, j) in keys(arities)])
+    obsyms = [:V]
+    for (i, o) in keys(arities)
+        push!(obsyms, hypsyms(i,o)[1])
+    end 
     xobs = [Ob(FreeSchema, s) for s in obsyms]
 
     for x in xobs
@@ -360,17 +367,20 @@ function sigma_to_hyptype(Σ::Set{Box{Symbol}})
     end
 
     v = xobs[1]
-    add_generator!(pres, FreeSchema.Attr{:generator}([:color, xobs[1], name], [xobs[1], name]))
+    add_generator!(pres, FreeSchema.Attr{:generator}(
+        [:color, xobs[1], name], [xobs[1], name]))
 
     for (n, (i, o)) in enumerate(keys(arities))
         x = xobs[n+1]
-        add_generator!(pres, FreeSchema.Attr{:generator}([Symbol("l_$(i)_$o"), x, name], [x, name]))
+        _, lab, src, tgt = hypsyms(i, o)
+        add_generator!(pres, FreeSchema.Attr{:generator}(
+            [lab, x, name], [x, name]))
 
-        for i_ind in 1:i
-            add_generator!(pres, Hom(Symbol("s_$(i)_$(o)_$i_ind"), x, v))
+        for src_sym in src
+            add_generator!(pres, Hom(src_sym, x, v))
         end
-        for o_ind in 1:o
-            add_generator!(pres, Hom(Symbol("t_$(i)_$(o)_$o_ind"), x, v))
+        for tgt_sym in tgt
+            add_generator!(pres, Hom(tgt_sym, x, v))
         end
     end
     acst = ACSetType(pres, index=[])
@@ -386,11 +396,14 @@ function sigma_to_hyptype(Σ::Set{Box{Symbol}})
     return acst{Symbol}, obtype{Symbol}, sctype{Symbol}, cspcset{Symbol}
 end
 
-function hypsyms(i::Int, j::Int)::Tuple{Symbol, Symbol, Vector{Symbol}, Vector{Symbol}}
-    ename = Symbol("E_$(i)_$j")
-    lab = Symbol("l_$(i)_$j")
-    src = [Symbol("s_$(i)_$(j)_$i_ind") for i_ind in 1:i]
-    tgt = [Symbol("t_$(i)_$(j)_$j_ind") for j_ind in 1:j]
+function hypsyms(i::Vector{Symbol}, j::Vector{Symbol}
+                )::Tuple{Symbol, Symbol, Vector{Symbol}, Vector{Symbol}}
+    str = x -> join(map(string,x),"_")
+    istr, jstr = map(str, [i,j])
+    ename = Symbol("E__$(istr)__$jstr")
+    lab = Symbol("l__$(istr)__$jstr")
+    src = [Symbol("s__$(istr)__$(jstr)__$i_ind") for i_ind in eachindex(i)]
+    tgt = [Symbol("t__$(istr)__$(jstr)__$j_ind") for j_ind in eachindex(j)]
     return ename, lab, src, tgt
 end
 
@@ -455,6 +468,16 @@ function wd_pad(sd::WD)::WD
 end
 
 """
+For a Wiring Diagram with labeled ports, a given box has an arity (and coarity)
+"""
+function get_arity(sd::WD, i::Int)::Pair{Vector{Symbol}, Vector{Symbol}}
+    d = sd.diagram
+    ss = [:in_port_box => :in_port_type, :out_port_box => :out_port_type]
+    ip, op = [d[y][incident(d, i, x)] for (x, y) in ss]
+    return ip => op
+end
+
+"""
 Convert wiring diagram to cospan
 All components connected by Frobenius generators are condensed together.
 """
@@ -479,7 +502,7 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
     end
 
     # Get hyperedge-specific info given a box index
-    hs = i -> hypsyms(length(inneighbors(sd, i)), length(outneighbors(sd, i)))
+    hs = i -> hypsyms(get_arity(sd, i)...)
 
     # Total # of connected components
     n = conn_comps.ngroups - (nparts(d, :Box) - length(nodes))
@@ -581,18 +604,17 @@ end
 function cospan_to_wd(csp::ACSet{CD})::WD where{CD}
     obs = ob(CD)
     nin, nout = [nparts(csp, x) for x in [:_I, :_O]]
-    intypes, outtypes = repeat([nothing], nin), repeat([nothing], nout)
+    intypes, outtypes = [csp[:color][csp[x]] for x in [:_i, :_o]]
 
     res = WiringDiagram(intypes, outtypes)
 
     boxdict = Dict()
     for o in obs[2:end-2] # skip V, _I, and _O
-        _, o_nin_, o_nout_ = Base.split(string(o), "_")
-        o_nin, o_nout = [parse(Int, x) for x in [o_nin_, o_nout_]]
-        o_intypes, o_outtypes = repeat([nothing], o_nin), repeat([nothing], o_nout)
-
-        lab = Symbol("l_$(o_nin)_$o_nout")
-        arity = o_nin => o_nout
+        _, o_nin_, o_nout_ = Base.split(string(o), "__")
+        o_intypes, o_outtypes = arity = [
+            map(Symbol, filter(!isempty, Base.split(x, "_"))) for x in [o_nin_, o_nout_]]
+        lab = hypsyms(o_intypes, o_outtypes)[2]
+        # arity = o_nin => o_nout
         boxdict[arity] = Int[]
         for j in 1:nparts(csp, o)
             bx = Box(csp[lab][j], o_intypes, o_outtypes)
@@ -621,7 +643,7 @@ function cospan_to_wd(csp::ACSet{CD})::WD where{CD}
                 end
             end
         end
-        b = add_box!(res, Junction(nothing, 1, 1))
+        b = add_box!(res, Junction(csp[:color][i], 1, 1))
 
         for (_, (v_i, port)) in enumerate(v_in)
             src = v_i < 0 ? (input_id(res),-v_i) : (v_i, port)
