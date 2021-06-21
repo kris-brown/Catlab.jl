@@ -104,17 +104,32 @@ end
 """
 Apply a rewrite rule (given as a span, L<-I->R) to a ACSet
 using a match morphism `m` which indicates where to apply
-the rewrite.
+the rewrite. Returns rewritten result.
 """
 function rewrite_match(L::ACSetTransformation{CD, AD},
                        R::ACSetTransformation{CD, AD},
                        m::ACSetTransformation{CD, AD}
                       )::AbstractACSet{CD, AD} where {CD, AD}
-    @assert dom(L) == dom(R)
-    @assert codom(L) == dom(m)
-    (k, _) = pushout_complement(L, m)
-    l1, _ = pushout(R, k)
-    return codom(l1)
+    return codom(rewrite_match_data(L, R, m)[3])
+end
+
+"""
+Apply a rewrite rule (given as a span, L<-I->R) to a ACSet
+using a match morphism `m` which indicates where to apply
+the rewrite. Returns all constructed morphisms in the DPO diagram.
+"""
+function rewrite_match_data(L::ACSetTransformation{CD, AD},
+                            R::ACSetTransformation{CD, AD},
+                            m::ACSetTransformation{CD, AD}
+                           )::Tuple{ACSetTransformation{CD, AD},
+                                    ACSetTransformation{CD, AD},
+                                    ACSetTransformation{CD, AD},
+                                    ACSetTransformation{CD, AD}} where {CD, AD}
+  @assert dom(L) == dom(R)
+  @assert codom(L) == dom(m)
+  k, g = pushout_complement(L, m)
+  l1, l2 = pushout(R, k)
+  return k, g, l1, l2
 end
 
 """

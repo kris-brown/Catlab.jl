@@ -7,11 +7,91 @@ using Catlab.Present: translate_generator
 using Catlab.CategoricalAlgebra.FinSets
 using Catlab.Theories: attr, adom
 using Catlab.CategoricalAlgebra.DPO
+using Catlab.CategoricalAlgebra.DPO: rewrite_match_data
 
-using DataStructures: IntDisjointSets
+using AutoHashEquals
+using DataStructures: IntDisjointSets, find_root
+
 WD = WiringDiagram{Any,Any,Any,Any}
 WDPair = Pair{WiringDiagram{Any,Any,Any,Any},
               WiringDiagram{Any,Any,Any,Any}}
+
+"""
+An equation for a partial theory. May or may not be reversible.
+"""
+function check_wd(wd::WD)::Bool
+    b = true
+    d = wd.diagram
+    # no pass through wires
+    b &= nparts(d, :PassWire) == 0
+    # Every external port has exactly one external wire
+    for (w, W, p) in [(:in_src,:InWire, :OuterInPort),
+                      (:out_tgt, :OutWire, :OuterOutPort)]
+        b &= nparts(d, W) == nparts(d, p)
+        b &= all(x->length(x)==1, d.indices[w])
+    end
+    # Every port has exactly one wire/extwire connected
+    for (ew, w, p) in [(:in_tgt, :tgt, :InPort),
+                      (:out_src, :src, :OutPort)]
+        ewind, wind = [d.indices[x] for x in [ew, w]]
+        ewlen, wlen = [map(length, x) for x in [ewind, wind]]
+
+        for port in 1:nparts(d, p)
+            b &= sort([ewlen[port], wlen[port]]) == [0, 1]
+        end
+    end
+return b
+end
+@auto_hash_equals struct Eq
+    name::Symbol
+    l::WD
+    r::WD
+    rev::Bool
+    function Eq(n,l,r,v)
+        for ext in [:OuterInPort, :OuterOutPort]
+            err = "$n has different # of $ext in left and right patterns"
+            @assert nparts(l.diagram, ext) == nparts(r.diagram, ext) err
+        end
+        check_wd(l) || error("$n - bad l")
+        check_wd(r) || error("$n - bad r")
+        return new(n,l,r,v)
+    end
+end
+
+function Base.isless(x::Eq, y::Eq)::Bool
+    return Base.isless(x.name, y.name)
+end 
+
+struct EqTheory
+    gens :: Set{Box{Symbol}}
+    eqs :: Set{Eq}
+    function EqTheory(g,e)
+        # check that all terms in eqs are built from generators in gens / have
+        # the right arity
+        return new(g,e)
+    end
+end
+
+function Base.union(t1::EqTheory, t2::EqTheory)::EqTheory
+    return EqTheory(union(t1.gens, t2.gens), union(t1.eqs, t2.eqs))
+end
+
+function Base.union(t1::EqTheory, gens::Set{Box{Symbol}}, eqs::Set{Eq})::EqTheory
+    return EqTheory(union(t1.gens, gens), union(t1.eqs, eqs))
+end
+
+function add_eq(t::EqTheory, eqs...)::EqTheory
+    return EqTheory(t.gens, union(t.eqs, eqs))
+end
+
+function Base.getindex(t::EqTheory, x::Symbol)::Eq
+    for eq in t.eqs
+        if eq.name == x
+            return eq
+        end
+    end
+    throw(KeyError(x))
+end
 
 """
 Pick a particular homomorphism specified by a partial assignment. Fails if
@@ -42,63 +122,105 @@ function constrained_homomorphism(
     end
 
 end
+
+"""Defined only for monic morphisms"""
+function invert(x::ACSetTransformation)::ACSetTransformation
+    function invert_comp(s::Symbol)::Vector{Int}
+        res = Int[]
+        for i in 1:nparts(codom(x), s)
+            v = findfirst(==(i), collect(x.components[s]))
+            if v === nothing 
+                # println("missing $s#$i")
+                push!(res, 1)
+            else 
+                push!(res, v)
+            end
+        end 
+        return res
+    end
+    d = Dict([s=>invert_comp(s) for s in keys(x.components)])
+    return ACSetTransformation(codom(x), dom(x); d...)
+end
+
+noth = n -> collect(repeat([nothing], n))
+δsd, μsd = WiringDiagram(noth(1), noth(2)), WiringDiagram(noth(2),noth(1))
+add_box!(δsd, Box(noth(1),noth(2)))
+add_box!(μsd, Box(noth(2),noth(1)))
+add_wires!(δsd, Pair[
+    (input_id(δsd), 1) => (1,1),
+    (1,1) => (output_id(δsd), 1),
+    (1,2) => (output_id(δsd), 2)])
+add_wires!(μsd, Pair[
+    (input_id(μsd), 1) => (1,1),
+    (input_id(μsd), 2) => (1,2),
+    (1,1) => (output_id(μsd), 1)])
+
 """
 Apply equality as a rewrite rule
 """
-function apply_eq(sc_cset::ACSet{CD, AD}, Σ::Set{Box{Symbol}},
-                  rule::WDPair; forward::Bool=true, repl::Bool=false,
-                  partial::Vector{Pair{Int,Int}}=Pair{Int,Int}[]
-                 )::ACSet{CD} where {CD, AD}
+function apply_eq(sc_cset::ACSet, T::EqTheory,
+                  eq::Symbol; forward::Bool=true, repl::Bool=false,
+                  match::Bool=true,
+                  kw...#::Vector{Pair{Int,Int}}=Pair{Int,Int}[]
+                 )::ACSet
+    rule = T[eq]
+    partial = Dict{Symbol, Dict{Int,Int}}([k=>Dict(v) 
+                                           for (k, v) in collect(kw)])
     # Orient the rule in the forward or reverse direction, determining which
     # side of the rule is the "L" pattern in the DPO rewrite
-    l, r = map(wd_pad, forward ? (rule[1], rule[2]) : (rule[2], rule[1]))
-    _, pat, _, Lmap = wd_to_cospan(l, Σ)
+    @assert rule.rev || forward "Cannot apply $(rule.name) in reverse direction"
+    l, r = map(wd_pad, forward ? (rule.l, rule.r) : (rule.r, rule.l))
+    pat,_,Lmap = wd_to_cospan(l, T.gens)[2:4]
 
     # l is either replaced with merging of l and r or, or just r
-    r_ = repl ? r : branch(l, r)[1]
-    R_= wd_to_cospan(r_, Σ)[2]
+    r_, lrmap = repl ? (r, nothing) : branch(l, r)[1:2]
+    R_,ccR,Rmap = wd_to_cospan(r_, T.gens)[2:4]
 
     # Store interface data and then erase it from CSets
     vmap = Pair{Int,Int}[]
     for i in 1:nparts(pat, :_I)
         push!(vmap, pat[:_i][i] => R_[:_i][i])
     end
-    for o in 1:nparts(R_, :_O)
+    for o in 1:nparts(pat, :_O)
         push!(vmap, pat[:_o][o] => R_[:_o][o])
     end
     vmapset = sort(collect(Set(vmap)))
 
     rem_IO!(pat)
     rem_IO!(R_)
-    I = sigma_to_hyptype(Σ)[4]()
-    add_parts!(I, :V, length(vmapset))
-    L = ACSetTransformation(I, pat, V=[v[1] for v in vmapset])
-    R = ACSetTransformation(I, R_, V=[v[2] for v in vmapset])
+    if repl 
+        I = sigma_to_hyptype(T.gens)[4]()
+        add_parts!(I, :V, length(vmapset))
+        L = ACSetTransformation(I, pat, V=[v[1] for v in vmapset])
+        R = ACSetTransformation(I, R_, V=[v[2] for v in vmapset])
+    else
+        L = id(pat)
+        R = construct_cospan_homomorphism(pat, R_, Lmap, lrmap, Rmap, ccR)
+    end 
 
     # Construct match morphism
     if isempty(partial)
-        m = homomorphism(pat, sc_cset)
-        if m === nothing
-            println("no match")
+        ms = filter(m->valid_dpo(L,m), homomorphisms(pat, sc_cset))
+        if isempty(ms)
+            !match || error("Match expected but none found")
             return sc_cset
         end
     else
-        pdict = Dict(partial)
-        vs = [get(pdict, i, nothing) for i in 1:nparts(pat, :V)]
-        m = constrained_homomorphism(pat, sc_cset, V=vs)
+        pdict = Dict(k=>[get(v, i, nothing) for i in 1:nparts(pat, k)]
+                      for (k, v) in collect(partial))
+        ms = [constrained_homomorphism(pat, sc_cset; pdict...)]
     end
 
-    # # construct L, R morphisms
-    # if repl
-    # else
-    #     # The "R" pattern is a merging of both sides of rewrite rule, so
-    #     # interface is also equal to the "L" pattern.
-    #     L = id(pat)
-    #     # Map L into R
-    #     R = construct_cospan_homomorphism(pat, R_, Lmap, lrmap, Rmap, ccR)
-    # end
-    # println("n E_0_1 $(nparts(dom(L), :E_0_1))")
-    new_apex = rewrite_match(L, R, m)
+    # could we do a horizontal composition of structured cospan rewrites to
+    # do all at once?
+    mseq = []
+    h = nothing
+    for m in ms
+         new_m = compose(vcat([m], mseq))
+         _, g, _, h = rewrite_match_data(L,R,new_m)
+         append!(mseq, [invert(g), h])
+    end
+    new_apex = codom(h)
     return new_apex
 end
 
@@ -110,13 +232,12 @@ function rem_IO!(sc_cset::ACSet)::Nothing
     rem_parts!(sc_cset, :_O, 1:nparts(sc_cset,:_O))
 end
 
+
 """
 Construct a cospan homomorphism from the following data:
-
 WD₁  ↪  WD₂
  ↟       ↟
 CSP₁ → CSP₂
-
 The maps from CSP to WD are effectively surjective because we keep track of the
 connected components in the WD.
 """
@@ -140,7 +261,7 @@ function construct_cospan_homomorphism(csp1::ACSet, csp2::ACSet,
     return ACSetTransformation(csp1, csp2; d...)
 end
 
-function branch(l::WD, r::WD)::Tuple{WD, Vector{Int}, Vector{Int}}
+function branch(l::WD, r::WD)# ::WD
     ld, rd = l.diagram, r.diagram
     nin, nout = [nparts(ld, x) for x in [:OuterInPort, :OuterOutPort]]
     res = WiringDiagram(noth(nin), noth(nout))
@@ -174,46 +295,30 @@ Return homomorphism as witness, if any
 Takes in set of generators Σ, equations I, wiring diagram csets c1 and c2.
 If oriented, then rewrites are only applied in the forward direction.
 """
-function prove(Σ::Set{Box{Symbol}}, I::Set{WDPair}, c1::WD, c2::WD;
+function prove(T::EqTheory, c1::WD, c2::WD;
                n::Int=3, oriented::Bool=false)::Union{Nothing, Any}
-    d1 = wd_to_cospan(c1, Σ)[2]
-    d2 = wd_to_cospan(c2, Σ)[2]
-
+    d1 = wd_to_cospan(c1, T.gens)[2]
+    d2 = wd_to_cospan(c2, T.gens)[2]
+    h = homomorphism(d2, d1)
+    if !(h===nothing)
+        return h
+    end
     for _ in 1:n
-        h = homomorphism(d2, d1)
+        for eq in sort(collect(T.eqs)) #, rev=true)
+            # println("applying $(eq.name)")
+            d1 = apply_eq(d1, T, eq.name; match=false)
+            if !oriented && eq.rev  # apply both rewrite rules
+                d1 = apply_eq(d1, T, eq.name; forward=false, match=false)
+            end
+            h = homomorphism(d2, d1)
+        end
         if !(h===nothing)
             return h
-        else
-            for eq in I
-                d1 = apply_eq(d1, Σ, eq)
-                if !oriented # apply both rewrite rules
-                    d1 = apply_eq(d1, Σ, eq, false)
-                end
-            end
         end
     end
-    return nothing
+    return nothing # return d1 if debugging
 end
 
-# Tests
-noth = n -> collect(repeat([nothing], n))
-Zero, One, Two, Three, Four, Five, Six = [noth(n) for n in 0:6]
-ϵ, η, δ, μ, dot = [Box(nothing, x, y) for (x, y) in
-    [(One, Zero), (Zero, One), (One, Two), (Two, One), (One, One)]]
-
-# Generators for special commutative Frobenius algebra
-scfa = [ϵ, η, δ, μ]
-δsd, μsd = WiringDiagram(One, Two), WiringDiagram(Two, One)
-add_box!(δsd, δ)
-add_box!(μsd, μ)
-add_wires!(δsd, Pair[
-    (input_id(δsd), 1) => (1,1),
-    (1,1) => (output_id(δsd), 1),
-    (1,2) => (output_id(δsd), 2)])
-add_wires!(μsd, Pair[
-    (input_id(μsd), 1) => (1,1),
-    (input_id(μsd), 2) => (1,2),
-    (1,1) => (output_id(μsd), 1)])
 
 """
 Given a signature, create an OpenCSetType for hypergraphs
@@ -281,6 +386,7 @@ Add a empty node between each generator and the outerbox and a node between each
 generator. This should be an idempotent function. (todo: add tests for this)
 """
 function wd_pad(sd::WD)::WD
+    check_wd(sd) || error("wd pad bad input $sd")
     sd = deepcopy(sd)
     d = sd.diagram
     in_delete, out_delete = Set{Int}(), Set{Int}()
@@ -337,8 +443,7 @@ Convert wiring diagram to cospan
 All components connected by Frobenius generators are condensed together.
 """
 function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
-                     )::Tuple{StructuredCospan, ACSet, Dict{Int,Int},
-                              Dict{Symbol,Vector{Int}}}
+                     )# ::Tuple{StructuredCospan, ACSet}
     sd = wd_pad(sd)
     d = sd.diagram
     aptype, _, sctype, sccsettype = sigma_to_hyptype(Σ)
@@ -353,7 +458,7 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
     for (srcport, tgtport, _) in d.tables[:Wire]
         srcbox, tgtbox = d[:out_port_box][srcport], d[:in_port_box][tgtport]
         if srcbox in nodes && tgtbox in nodes
-            union!(conn_comps, srcbox, tgtbox)
+            new_root = union!(conn_comps, srcbox, tgtbox)
         end
     end
 
@@ -362,12 +467,12 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
 
     # Total # of connected components
     n = conn_comps.ngroups - (nparts(d, :Box) - length(nodes))
-
     # Representative box index for each connected component
-    cclist = sort(collect(Set([conn_comps.parents[i] for i in nodes])))
+    cclist = sort(collect(Set([find_root(conn_comps,i) for i in nodes])))
+
     mapping[:V] = cclist
     # Map each boxid (that is Frobenius) to boxid that is its representative
-    vert_dict = Dict([i=>findfirst(==(conn_comps.parents[i]), cclist)
+    vert_dict = Dict([i=>findfirst(==(find_root(conn_comps,i)), cclist)
                       for i in nodes])
     apx = aptype()
     add_parts!(apx, :V, n)
@@ -401,7 +506,6 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
                 port_ind = findfirst(==(hypport), boxports)
 
                 box_ind = box_dict[hypedge]
-
                 set_subpart!(apx, box_ind, part[port_ind], vert_dict[vert])
             else
             end
@@ -433,7 +537,7 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
     set_subpart!(cset, :_i, collect(lft))
     set_subpart!(cset, :_o, collect(rght))
 
-    return sc, cset, vert_dict, mapping
+    return sc, cset, vert_dict, mapping  # --- we no longer use this data
 end
 
 function cospan_to_wd(csp::ACSet{CD})::WD where{CD}
@@ -489,3 +593,33 @@ function cospan_to_wd(csp::ACSet{CD})::WD where{CD}
     end
     return res
 end
+
+function label(wd::WD; 
+               w::Union{Vector{Pair{Int, String}}, Vector{String}}=String[], 
+               i::Union{Vector{Pair{Int, String}}, Vector{String}}=String[], 
+               o::Union{Vector{Pair{Int, String}}, Vector{String}}=String[], 
+              )::WD
+
+    wd_ = deepcopy(wd)
+    d = wd_.diagram
+    function to_vec(x::Union{Vector{Pair{Int, String}}, Vector{String}}, s::Symbol) 
+        return x[1] isa String ? x : [get(Dict(x), i, nothing) 
+                                   for i in 1:nparts(d, s)]
+    end
+
+    if !isempty(w)
+        v = to_vec(w, :Wire)
+        for (i, val) in enumerate(v)
+            set_subpart!(d, d[:tgt][i], :in_port_type, val)
+            set_subpart!(d, d[:src][i], :out_port_type, val)
+        end 
+    end
+    if !isempty(o)
+        set_subpart!(d, [d[:out_src][i] for i in 1:nparts(d, :OutWire)], 
+                         :out_port_type, to_vec(o, :OutWire))
+    end
+    if !isempty(i)
+        set_subpart!(d, :outer_in_port_type, to_vec(i, :InWire))
+    end
+    return wd_
+end 
