@@ -133,21 +133,21 @@ function invert(x::ACSetTransformation)::ACSetTransformation
         res = Int[]
         for i in 1:nparts(codom(x), s)
             v = findfirst(==(i), collect(x.components[s]))
-            if v === nothing 
+            if v === nothing
                 # println("missing $s#$i")
                 push!(res, 1)
-            else 
+            else
                 push!(res, v)
             end
-        end 
+        end
         return res
     end
     d = Dict([s=>invert_comp(s) for s in keys(x.components)])
     return ACSetTransformation(codom(x), dom(x); d...)
 end
 
-δ_box(x::Symbol) = Box(nothing, [x], [x,x])
-μ_box(x::Symbol) = Box(nothing, [x,x], [x])
+δ_box(x::Symbol) = Junction(x, 1, 2)
+μ_box(x::Symbol) = Junction(x, 2, 1)
 
 function δsd(x::Symbol)::WD
     wd = WiringDiagram([x], [x,x])
@@ -204,8 +204,9 @@ function apply_eq(sc_cset::ACSet, T::EqTheory,
     rem_IO!(R_)
     if repl 
         I = sigma_to_hyptype(T.gens)[4]()
-        add_parts!(I, :V, length(vmapset))
-        L = ACSetTransformation(I, pat, V=[v[1] for v in vmapset])
+        lnodes = [v[1] for v in vmapset]
+        add_parts!(I, :V, length(vmapset), color=pat[:color][lnodes])
+        L = ACSetTransformation(I, pat, V=lnodes)
         R = ACSetTransformation(I, R_, V=[v[2] for v in vmapset])
     else
         L = id(pat)
@@ -229,6 +230,7 @@ function apply_eq(sc_cset::ACSet, T::EqTheory,
     # do all at once?
     mseq = []
     h = nothing
+
     for m in ms
          new_m = compose(vcat([m], mseq))
          _, g, _, h = rewrite_match_data(L,R,new_m)
@@ -264,7 +266,7 @@ function construct_cospan_homomorphism(csp1::ACSet, csp2::ACSet,
     d = Dict{Symbol, Vector{Int}}()
     for (k, map1) in collect(cspwd1)
         mapping, map2 = Int[], [get(cc2, i, i) for i in cspwd2[k]]
-        for (i, csp1box) in enumerate(map1)
+        for (_, csp1box) in enumerate(map1)
             csp2box = wd1wd2[csp1box]
             csp2box_canonical = get(cc2, csp2box, csp2box)
             res = findfirst(==(csp2box_canonical), map2)
@@ -302,7 +304,9 @@ function branch(l::WD, r::WD)# ::WD
     lb, rb = [nparts(x, :Box) for x in [ld, rd]]
     lboxrange = collect(start+1:start+lb)
     rboxrange = collect(start+lb+1:start+lb+rb)
-    return ocompose(res, subboxes), lboxrange, rboxrange
+    ores = ocompose(res, subboxes)
+    @assert start+lb+rb == nparts(ores.diagram, :Box)
+    return ores, lboxrange, rboxrange
 end
 
 """
@@ -428,10 +432,10 @@ function wd_pad(sd::WD)::WD
         extsrc, exttgt = extsrctgt[i]
         for (outwire_id, extwire_data) in enumerate(d.tables[extwire])
             extport, innerport = collect(extwire_data)[[i,j]]
-            if !(d[:value][d[portbox][innerport]] === nothing)
+            if d[:box_type][d[portbox][innerport]] <: Box
                 exttype = d[exttypes[i]][extport]
-                newbox = add_part!(d, :Box, value=nothing,
-                                   box_type=Box{Nothing})
+                newbox = add_part!(d, :Box, value=exttype,
+                                   box_type=Junction{Nothing, Symbol})
                 new_in = add_part!(d, :InPort, in_port_box=newbox,
                                    in_port_type=exttype)
                 new_out = add_part!(d, :OutPort, out_port_box=newbox,
@@ -450,9 +454,9 @@ function wd_pad(sd::WD)::WD
     for (w, (s_port, t_port, _)) in enumerate(d.tables[:Wire])
         s_box = d[:out_port_box][s_port]
         t_box = d[:in_port_box][t_port]
-        if !(d[:value][s_box] === nothing ||  d[:value][t_box] === nothing)
+        if d[:box_type][s_box] <: Box && d[:box_type][t_box] <: Box
             s_typ, t_typ = d[:out_port_type][s_port], d[:in_port_type][t_port]
-            newbox = add_part!(d, :Box, value=nothing, box_type=Box{Nothing})
+            newbox = add_part!(d, :Box, value=s_typ, box_type=Junction{Nothing, Symbol})
             new_in = add_part!(d, :InPort, in_port_box=newbox, in_port_type=s_typ)
             new_out = add_part!(d, :OutPort, out_port_box=newbox, out_port_type=t_typ)
             add_part!(d, :Wire, src=s_port, tgt=new_in, wire_value=nothing)
@@ -491,7 +495,7 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
     mapping = Dict([sym => Int[] for sym in ob(aptype.body.body.parameters[1])])
 
     # Isolate box indices that correspond to Frobenius nodes
-    nodes = [i for (i, v) in enumerate(d[:value]) if v===nothing]
+    nodes = [i for (i, v) in enumerate(d[:box_type]) if v<:Junction]
     # Determine connected components by iterating over all wires
     conn_comps = IntDisjointSets(nparts(d, :Box))
     for (srcport, tgtport, _) in d.tables[:Wire]
@@ -518,8 +522,8 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
     apx = aptype()
     add_parts!(apx, :V, n)
     box_dict = Dict{Int,Int}()
-    for (box, val) in enumerate(d[:value])
-        if !(val===nothing)
+    for (box, (val, btype)) in enumerate(zip(d[:value], d[:box_type]))
+        if btype <: Box
             etype, lab, _, _ = hs(box)
             eind = add_part!(apx, etype; Dict([lab => val])...)
             box_dict[box] = eind
@@ -672,20 +676,20 @@ function label(wd::WD;
     set_subpart!(d, :in_port_type, repeat([nothing], nparts(d, :InPort)))
     set_subpart!(d, :out_port_type, repeat([nothing], nparts(d, :OutPort)))
     set_subpart!(d, :outer_in_port_type, repeat([nothing], nparts(d, :InWire)))
-    
+
     if !isempty(w)
         v = to_vec(w, :Wire)
         for (i, val) in enumerate(v)
             set_subpart!(d, d[:tgt][i], :in_port_type, val)
             set_subpart!(d, d[:src][i], :out_port_type, val)
-        end 
+        end
     end
     if !isempty(o)
-        set_subpart!(d, [d[:out_src][i] for i in 1:nparts(d, :OutWire)], 
+        set_subpart!(d, [d[:out_src][i] for i in 1:nparts(d, :OutWire)],
                          :out_port_type, to_vec(o, :OutWire))
     end
     if !isempty(i)
         set_subpart!(d, :outer_in_port_type, to_vec(i, :InWire))
     end
     return wd_
-end 
+end

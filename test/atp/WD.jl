@@ -18,11 +18,11 @@ t    = Box(:t,   [:A],    [:O]);
 Id   = Box(:Id,  [:O],    [:A]);
 cmp  = Box(:cmp, [:A,:A], [:A]);
 
-ϵ(x::Symbol=:X) = Box(nothing, [x], Symbol[])
-η(x::Symbol=:X) = Box(nothing, Symbol[], [x])
-δ(x::Symbol=:X) = Box(nothing, [x], [x,x])
-μ(x::Symbol=:X) = Box(nothing, [x,x], [x])
-dot(x::Symbol=:X) = Box(nothing, [x], [x])
+ϵ(x::Symbol=:X)   = Junction(x, 1, 0)
+η(x::Symbol=:X)   = Junction(x, 0, 1)
+δ(x::Symbol=:X)   = Junction(x, 1, 2)
+μ(x::Symbol=:X)   = Junction(x, 2, 1)
+dot(x::Symbol=:X) = Junction(x, 1, 1)
 
 # Generator sets
 Σ0         = Set{Box{Symbol}}()
@@ -371,22 +371,24 @@ mul_assoc  = Eq(:assoc,      mul_assoc_1,  mul_assoc_2,  true);
 leftid     = Eq(:leftid,     leftid_1,     passthru,     true);
 rightid    = Eq(:rightid,    rightid_1,    passthru,     true);
 e_uniq     = Eq(:e_uniq,     e_uniq_1,     e_uniq_2,     false);
-leftinv    = Eq(:leftinv,    leftinv_1,    e11,          true)
-rightinv   = Eq(:rightinv,   rightinv_1,   e11,          true)
+leftinv    = Eq(:leftinv,    leftinv_1,    e11,          true);
+rightinv   = Eq(:rightinv,   rightinv_1,   e11,          true);
 uniq_inv   = Eq(:uniq_inv,   uniq_inv_1,   uniq_inv_2,   true);
 gdiv       = Eq(:gdiv,       div_1,        div_2,        true);
 leftcancel = Eq(:leftcancel, leftcancel_1, leftcancel_2, true);
-s_order_2  = Eq(:s_ord_2, ss, e_wd, true);
-r_order_3  = Eq(:r_ord_3, rrr, e_wd, true);
-refls      = Eq(:refls, refls_1, o1, true);
-reflt      = Eq(:reflt, reflt_1, o1, true);
-cmp_intro  = Eq(:cmp,   cmp_1, cmp_2, false);
+s_order_2  = Eq(:s_ord_2,    ss,           e_wd,         true);
+r_order_3  = Eq(:r_ord_3,    rrr,          e_wd,         true);
+refls      = Eq(:refls,      refls_1,      o1,           true);
+reflt      = Eq(:reflt,      reflt_1,      o1,           true);
+cmp_intro  = Eq(:cmp,        cmp_1,        cmp_2,        false);
+
 # Equation sets
 I_monoid = Set([mul_assoc, leftid, rightid, mul]);
 I_group  = Set([leftinv, rightinv]);
 I_d3h    = Set([s_order_2, r_order_3]);
 I_reflG  = Set([refls, reflt])
 I_cat    = Set{Eq}() # TODO associativity of cmp
+
 # Theories
 T_monoid = EqTheory(Σ_monoid, I_monoid);
 T_group  = union(T_monoid, Σ_group, I_group)
