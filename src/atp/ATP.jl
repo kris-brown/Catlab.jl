@@ -19,16 +19,16 @@ WDPair = Pair{WiringDiagram{Any,Any,Any,Any},
 """
 An equation for a partial theory. May or may not be reversible.
 """
-function check_wd(wd::WD)::Bool
-    b = true
+function check_wd(wd::WD)::Nothing
     d = wd.diagram
     # no pass through wires
-    b &= nparts(d, :PassWire) == 0
+    nparts(d, :PassWire) == 0 || error("$wd has a passthrough wire")
     # Every external port has exactly one external wire
     for (w, W, p) in [(:in_src,:InWire, :OuterInPort),
                       (:out_tgt, :OutWire, :OuterOutPort)]
-        b &= nparts(d, W) == nparts(d, p)
-        b &= all(x->length(x)==1, d.indices[w])
+        nparts(d, W) == nparts(d, p) || error("#$W != #$p")
+        err = "$w indices: $(d.indices[w]) - not all length 1"
+        all(x->length(x)==1, d.indices[w]) || error(err)
     end
     # Every port has exactly one wire/extwire connected
     for (ew, w, p) in [(:in_tgt, :tgt, :InPort),
@@ -37,13 +37,14 @@ function check_wd(wd::WD)::Bool
         ewlen, wlen = [map(length, x) for x in [ewind, wind]]
 
         for port in 1:nparts(d, p)
-            b &= sort([ewlen[port], wlen[port]]) == [0, 1]
+            err = "Port $port does not have exactly one wire"
+            sort([ewlen[port], wlen[port]]) == [0, 1] || error("$wd\n"*err)
         end
     end
-    # to-do, check typing of ports is consistent
-    # all boxes with "nothing" symbol must have same type for all in/outports
+    # TODO check typing of ports is consistent
+    # all junctions must have same type for all in/outports
     # external port types must match internal ports they're connected to
-    return b
+
 end
 
 @auto_hash_equals struct Eq
@@ -56,23 +57,114 @@ end
             err = "$n has different # of $ext in left and right patterns"
             @assert nparts(l.diagram, ext) == nparts(r.diagram, ext) err
         end
-        check_wd(l) || error("$n - bad l")
-        check_wd(r) || error("$n - bad r")
+        check_wd(l)
+        check_wd(r)
         return new(n,l,r,v)
     end
 end
-
 function Base.isless(x::Eq, y::Eq)::Bool
     return Base.isless(x.name, y.name)
 end
 
+"""
+TODO Automatically create (total) intro and single-valuedness axioms for gens.
+These defaults can be overridden by providing eqs [SYM]_intro and [SYM]_sv
+respectively.
+"""
 struct EqTheory
     gens :: Set{Box{Symbol}}
     eqs :: Set{Eq}
-    function EqTheory(g,e)
-        # check that all terms in eqs are built from generators in gens / have
-        # the right arity
-        return new(g,e)
+    function EqTheory(gs::Set{Box{Symbol}}, es::Set{Eq})
+        es = deepcopy(es)
+        esyms = Set{Symbol}()
+        for eq in es
+            check_eq(gs, eq)
+            push!(esyms, eq.name)
+        end
+        # Create total intro and singlevalued axioms for each gen if not in e
+        for gen in gs
+            si, ss = [Symbol(string(gen.value)*x) for x in ["_intro", "_sv"]]
+            si in esyms || push!(es, intro_rule(gen))
+            ss in esyms || push!(es, singlevalued_rule(gen))
+        end
+        return new(gs,es)
+    end
+end
+
+ϵ_box(x::Symbol) = Junction(x, 1, 0)
+δ_box(x::Symbol) = Junction(x, 1, 2)
+μ_box(x::Symbol) = Junction(x, 2, 1)
+
+function intro_rule(gen::Box{Symbol})::Eq
+    l, r = [WiringDiagram(gen.input_ports, Symbol[]) for _ in 1:2]
+    rb = add_box!(r, gen)
+    for (i, typ) in enumerate(gen.input_ports)
+        b = add_box!(l, ϵ_box(typ))
+        add_wire!(l, (input_id(l), i)=>(b,1))
+        add_wire!(r, (input_id(r), i)=>(rb,i))
+    end
+    for (i, typ) in enumerate(gen.output_ports)
+        b = add_box!(r, ϵ_box(typ))
+        add_wire!(r, (rb, i)=>(b, 1))
+    end
+    return Eq(Symbol(string(gen.value)*"_intro"), l, r, false)
+end
+
+function singlevalued_rule(gen::Box{Symbol})::Eq
+    op = gen.output_ports
+    no = length(op)
+    l, r = [WiringDiagram(gen.input_ports, [op...,op...]) for _ in 1:2]
+    lb1, lb2 = add_boxes!(l, [gen, gen])
+    rb = add_box!(r, gen)
+
+    for (i, typ) in enumerate(gen.input_ports)
+        lδ = add_box!(l, δ_box(typ))
+        add_wires!(l, Pair[
+            (input_id(l), i)=>(lδ,1),
+            (lδ, 1) => (lb1, i),
+            (lδ, 2) => (lb2, i)])
+        add_wire!(r, (input_id(r), i)=>(rb,i))
+    end
+    for (i, typ) in enumerate(op)
+        rδ = add_box!(r, δ_box(typ))
+        add_wires!(r, Pair[
+            (rb, i)=>(rδ,1),
+            (rδ, 1) => (output_id(r), i),
+            (rδ, 2) => (output_id(r), i+no)])
+        add_wires!(l, Pair[
+            (lb1,i)=>(output_id(l), i),
+            (lb2,i)=>(output_id(l), i+no)])
+        end
+
+    return Eq(Symbol(string(gen.value)*"_sv"), l, r, false)
+
+end
+
+"""
+
+"""
+function check_eq(Σ::Set{Box{Symbol}}, e::Eq)::Nothing
+    for s in [:outer_in_port_type, :outer_out_port_type]
+        e.l.diagram[s] == e.r.diagram[s] || error("Interfaces of $eq don't match")
+    end
+    Σd = Dict{Symbol, Pair{Vector{Symbol}, Vector{Symbol}}}([
+        b.value => (b.input_ports => b.output_ports) for b in Σ])
+    check_wd(Σd, e.l)
+    check_wd(Σd, e.r)
+end
+"""
+Check that all terms in eqs are built from generators in gens / have
+the right arity
+"""
+function check_wd(Σ::Dict{Symbol, Pair{Vector{Symbol},Vector{Symbol}}},
+                  wd::WD)::Nothing
+    for b in boxes(wd)
+        if haskey(Σ, b.value)
+            ps = b.input_ports => b.output_ports
+            ps == Σ[b.value] || error("Wd $wd Box $b has mismatch with signature $Σ")
+        else
+            b isa Junction || error("Wd $wd Unknown box symbol $(b.value) for $Σ")
+        end
     end
 end
 
@@ -146,8 +238,7 @@ function invert(x::ACSetTransformation)::ACSetTransformation
     return ACSetTransformation(codom(x), dom(x); d...)
 end
 
-δ_box(x::Symbol) = Junction(x, 1, 2)
-μ_box(x::Symbol) = Junction(x, 2, 1)
+
 
 function δsd(x::Symbol)::WD
     wd = WiringDiagram([x], [x,x])
@@ -178,7 +269,7 @@ function apply_eq(sc_cset::ACSet, T::EqTheory,
                   kw...#::Vector{Pair{Int,Int}}=Pair{Int,Int}[]
                  )::ACSet
     rule = T[eq]
-    partial = Dict{Symbol, Dict{Int,Int}}([k=>Dict(v) 
+    partial = Dict{Symbol, Dict{Int,Int}}([k=>Dict(v)
                                            for (k, v) in collect(kw)])
     # Orient the rule in the forward or reverse direction, determining which
     # side of the rule is the "L" pattern in the DPO rewrite
@@ -202,7 +293,7 @@ function apply_eq(sc_cset::ACSet, T::EqTheory,
 
     rem_IO!(pat)
     rem_IO!(R_)
-    if repl 
+    if repl
         I = sigma_to_hyptype(T.gens)[4]()
         lnodes = [v[1] for v in vmapset]
         add_parts!(I, :V, length(vmapset), color=pat[:color][lnodes])
@@ -211,7 +302,7 @@ function apply_eq(sc_cset::ACSet, T::EqTheory,
     else
         L = id(pat)
         R = construct_cospan_homomorphism(pat, R_, Lmap, lrmap, Rmap, ccR)
-    end 
+    end
 
     # Construct match morphism
     if isempty(partial)
@@ -363,7 +454,7 @@ function sigma_to_hyptype(Σ::Set{Box{Symbol}})
     obsyms = [:V]
     for (i, o) in keys(arities)
         push!(obsyms, hypsyms(i,o)[1])
-    end 
+    end
     xobs = [Ob(FreeSchema, s) for s in obsyms]
 
     for x in xobs
@@ -417,7 +508,7 @@ Add a empty node between each generator and the outerbox and a node between each
 generator. This should be an idempotent function. (todo: add tests for this)
 """
 function wd_pad(sd::WD)::WD
-    check_wd(sd) || error("wd pad bad input $sd")
+    check_wd(sd)
     sd = deepcopy(sd)
     d = sd.diagram
     in_delete, out_delete = Set{Int}(), Set{Int}()
@@ -661,16 +752,16 @@ function cospan_to_wd(csp::ACSet{CD})::WD where{CD}
     return res
 end
 
-function label(wd::WD; 
-               w::Union{Vector{Pair{Int, String}}, Vector{String}}=String[], 
-               i::Union{Vector{Pair{Int, String}}, Vector{String}}=String[], 
-               o::Union{Vector{Pair{Int, String}}, Vector{String}}=String[], 
+function label(wd::WD;
+               w::Union{Vector{Pair{Int, String}}, Vector{String}}=String[],
+               i::Union{Vector{Pair{Int, String}}, Vector{String}}=String[],
+               o::Union{Vector{Pair{Int, String}}, Vector{String}}=String[],
               )::WD
 
     wd_ = deepcopy(wd)
     d = wd_.diagram
-    function to_vec(x::Union{Vector{Pair{Int, String}}, Vector{String}}, s::Symbol) 
-        return x[1] isa String ? x : [get(Dict(x), i, nothing) 
+    function to_vec(x::Union{Vector{Pair{Int, String}}, Vector{String}}, s::Symbol)
+        return x[1] isa String ? x : [get(Dict(x), i, nothing)
                                    for i in 1:nparts(d, s)]
     end
     set_subpart!(d, :in_port_type, repeat([nothing], nparts(d, :InPort)))

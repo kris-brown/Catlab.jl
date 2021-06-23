@@ -35,18 +35,6 @@ dot(x::Symbol=:X) = Junction(x, 1, 1)
 
 
 # Diagrams
-mul_1 = WiringDiagram(Two, Zero);
-ϵ1, ϵ2 = add_boxes!(mul_1, [ϵ(), ϵ()]);
-add_wires!(mul_1, Pair[
-    (input_id(mul_1), 1) => (ϵ1, 1),
-    (input_id(mul_1), 2) => (ϵ2, 1)])
-
-mul_2 = WiringDiagram(Two, Zero);
-ϵ1, m1 = add_boxes!(mul_2, [ϵ(), mmul]);
-add_wires!(mul_2, Pair[
-    (input_id(mul_2), 1) => (m1, 1),
-    (input_id(mul_2), 2) => (m1, 2),
-    (m1, 1)              => (ϵ1, 1)])
 
 mul_assoc_1 = WiringDiagram(Three, One);
 m1, m2 = add_boxes!(mul_assoc_1, [mmul, mmul])
@@ -106,20 +94,20 @@ add_wires!(xx, Pair[
     (split, 2)        => (m1, 2),
     (m1, 1)           => (output_id(xx), 1)]);
 
-e_uniq_1 = WiringDiagram(Zero, Two)
-e1,e2 = add_boxes!(e_uniq_1, [e, e])
-add_wires!(e_uniq_1, Pair[
-    (e1, 1) => (output_id(e_uniq_1), 1),
-    (e2, 1) => (output_id(e_uniq_1), 2)])
+# e_uniq_1 = WiringDiagram(Zero, Two)
+# e1,e2 = add_boxes!(e_uniq_1, [e, e])
+# add_wires!(e_uniq_1, Pair[
+#     (e1, 1) => (output_id(e_uniq_1), 1),
+#     (e2, 1) => (output_id(e_uniq_1), 2)])
 
-e_uniq_2 = WiringDiagram(Zero, Two)
-e1,e2, μbox, δbox = add_boxes!(e_uniq_2, [e, e, μ(), δ()])
-add_wires!(e_uniq_2, Pair[
-    (e1, 1) => (μbox, 1),
-    (e2, 1) => (μbox, 2),
-    (μbox, 1) => (δbox, 1),
-    (δbox, 1) => (output_id(e_uniq_2), 1),
-    (δbox, 2) => (output_id(e_uniq_2), 2)])
+# e_uniq_2 = WiringDiagram(Zero, Two)
+# e1,e2, μbox, δbox = add_boxes!(e_uniq_2, [e, e, μ(), δ()])
+# add_wires!(e_uniq_2, Pair[
+#     (e1, 1) => (μbox, 1),
+#     (e2, 1) => (μbox, 2),
+#     (μbox, 1) => (δbox, 1),
+#     (δbox, 1) => (output_id(e_uniq_2), 1),
+#     (δbox, 2) => (output_id(e_uniq_2), 2)])
 
 leftinv_1 = WiringDiagram(One, One)
 δbox, ibox, mbox = add_boxes!(leftinv_1, [δ(), inv, mmul])
@@ -366,11 +354,9 @@ add_wires!(cmp_2, Pair[
 
 
 # Equations
-mul        = Eq(:mul,        mul_1,        mul_2,        false);
 mul_assoc  = Eq(:assoc,      mul_assoc_1,  mul_assoc_2,  true);
 leftid     = Eq(:leftid,     leftid_1,     passthru,     true);
 rightid    = Eq(:rightid,    rightid_1,    passthru,     true);
-e_uniq     = Eq(:e_uniq,     e_uniq_1,     e_uniq_2,     false);
 leftinv    = Eq(:leftinv,    leftinv_1,    e11,          true);
 rightinv   = Eq(:rightinv,   rightinv_1,   e11,          true);
 uniq_inv   = Eq(:uniq_inv,   uniq_inv_1,   uniq_inv_2,   true);
@@ -383,7 +369,7 @@ reflt      = Eq(:reflt,      reflt_1,      o1,           true);
 cmp_intro  = Eq(:cmp,        cmp_1,        cmp_2,        false);
 
 # Equation sets
-I_monoid = Set([mul_assoc, leftid, rightid, mul]);
+I_monoid = Set([mul_assoc, leftid, rightid]);
 I_group  = Set([leftinv, rightinv]);
 I_d3h    = Set([s_order_2, r_order_3]);
 I_reflG  = Set([refls, reflt])
