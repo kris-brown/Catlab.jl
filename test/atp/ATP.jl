@@ -10,9 +10,9 @@ if 1+1==2
     rw1 = apply_eq(idxxid_sc, T_monoid, :leftid);
     rw2 = apply_eq(rw1,       T_monoid, :rightid);
 
-    @test !is_homomorphic(xx_hg, idxxid_sc) # not yet
-    @test !is_homomorphic(xx_hg, rw1) # not yet
-    @test is_homomorphic(xx_hg, rw2) # prove after applying leftid AND rightid
+    @test !csp_homomorphic(xx_hg, idxxid_sc) # not yet
+    @test !csp_homomorphic(xx_hg, rw1) # not yet
+    @test csp_homomorphic(xx_hg, rw2) # prove after applying leftid AND rightid
 
     proveresult = prove(T_monoid, idxxid, xx, oriented=true)
     @test !(proveresult === nothing)

@@ -297,8 +297,6 @@ function backtracking_search(f, X::AbstractACSet{CD}, Y::AbstractACSet{CD};
   assignment_depth = map(copy, assignment)
   inv_assignment = NamedTuple{Ob}(
     (c in monic_comps ? zeros(Int, nparts(Y, c)) : nothing) for c in Ob)
-  println(typeof(assignment))
-  println(typeof(inv_assignment))
   state = BacktrackingState(assignment, assignment_depth, inv_assignment, X, Y)
 
   # Make any initial assignments, failing immediately if inconsistent.

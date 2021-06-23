@@ -287,7 +287,8 @@ function apply_eq(sc_cset::ACSet, T::EqTheory,
     # Construct match morphism
     pdict = Dict(k=>[get(v, i, nothing) for i in 1:nparts(pat, k)]
                      for (k, v) in collect(partial))
-    ms = filter(m->valid_dpo(L,m), homomorphisms(pat, sc_cset, monic=monic, initial=pdict))
+    ms = filter(m->valid_dpo(L,m), homomorphisms(
+        pat, sc_cset, monic=monic, initial=pdict))
 
     # could we do a horizontal composition of structured cospan rewrites to
     # do all at once?
@@ -306,6 +307,19 @@ function apply_eq(sc_cset::ACSet, T::EqTheory,
     end
     new_apex = codom(h)
     return new_apex
+end
+
+"""
+A cospan homomorphism requires inputs and outputs to be isomorphic and for the
+following diagram to commute
+   X1
+  ↗   ↖
+I   ↓  O
+  ↘   ↙
+   X2
+"""
+function csp_homomorphic(sc_cset1, sc_cset2)::Bool
+    return is_homomorphic(sc_cset1, sc_cset2, isos = [:_I, :_O])
 end
 
 """
@@ -394,7 +408,7 @@ function prove(T::EqTheory, c1::WD, c2::WD;
     for _ in 1:n
         for eq in sort(collect(T.eqs)) #, rev=true)
             # println("applying $(eq.name)")
-            d1 = apply_eq(d1, T, eq.name; match=false)
+            d1 = apply_eq(d1, T, eq.name; n=-1)
             if !oriented && eq.rev  # apply both rewrite rules
                 d1 = apply_eq(d1, T, eq.name; forward=false, match=false)
             end
