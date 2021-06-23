@@ -35,24 +35,26 @@ dot(x::Symbol=:X) = Junction(x, 1, 1)
 
 
 # Diagrams
+function assoc(b::Box{Symbol})::Eq
+    l = WiringDiagram(Three, One);
+    m1, m2 = add_boxes!(l, [b, b])
+    add_wires!(l, Pair[
+        (input_id(l), 1) => (m1, 1),
+        (input_id(l), 2) => (m1, 2),
+        (input_id(l), 3) => (m2, 2),
+        (m1, 1)          => (m2, 1),
+        (m2, 1)          => (output_id(l), 1)]);
 
-mul_assoc_1 = WiringDiagram(Three, One);
-m1, m2 = add_boxes!(mul_assoc_1, [mmul, mmul])
-add_wires!(mul_assoc_1, Pair[
-    (input_id(mul_assoc_1), 1) => (m1, 1),
-    (input_id(mul_assoc_1), 2) => (m1, 2),
-    (input_id(mul_assoc_1), 3) => (m2, 2),
-    (m1, 1)                    => (m2, 1),
-    (m2, 1)                    => (output_id(mul_assoc_1), 1)]);
-
-mul_assoc_2 = WiringDiagram(Three, One);
-m1,m2 = add_boxes!(mul_assoc_2, [mmul, mmul])
-add_wires!(mul_assoc_2, Pair[
-    (input_id(mul_assoc_2), 1) => (m1, 1),
-    (input_id(mul_assoc_2), 2) => (m2, 1),
-    (input_id(mul_assoc_2), 3) => (m2, 2),
-    (m2, 1)                    => (m1, 2),
-    (m1, 1)                    => (output_id(mul_assoc_2), 1)]);
+    r = WiringDiagram(Three, One);
+    m1,m2 = add_boxes!(r, [b, b])
+    add_wires!(r, Pair[
+        (input_id(r), 1) => (m1, 1),
+        (input_id(r), 2) => (m2, 1),
+        (input_id(r), 3) => (m2, 2),
+        (m2, 1)          => (m1, 2),
+        (m1, 1)          => (output_id(r), 1)]);
+    return Eq(Symbol(string(b.value)*"_assoc"), l,  r,  true);
+end
 
 leftid_1 = WiringDiagram(One, One)
 ebox, mbox = add_boxes!(leftid_1, [e, mmul]);
@@ -94,21 +96,6 @@ add_wires!(xx, Pair[
     (split, 2)        => (m1, 2),
     (m1, 1)           => (output_id(xx), 1)]);
 
-# e_uniq_1 = WiringDiagram(Zero, Two)
-# e1,e2 = add_boxes!(e_uniq_1, [e, e])
-# add_wires!(e_uniq_1, Pair[
-#     (e1, 1) => (output_id(e_uniq_1), 1),
-#     (e2, 1) => (output_id(e_uniq_1), 2)])
-
-# e_uniq_2 = WiringDiagram(Zero, Two)
-# e1,e2, μbox, δbox = add_boxes!(e_uniq_2, [e, e, μ(), δ()])
-# add_wires!(e_uniq_2, Pair[
-#     (e1, 1) => (μbox, 1),
-#     (e2, 1) => (μbox, 2),
-#     (μbox, 1) => (δbox, 1),
-#     (δbox, 1) => (output_id(e_uniq_2), 1),
-#     (δbox, 2) => (output_id(e_uniq_2), 2)])
-
 leftinv_1 = WiringDiagram(One, One)
 δbox, ibox, mbox = add_boxes!(leftinv_1, [δ(), inv, mmul])
 add_wires!(leftinv_1, Pair[
@@ -133,22 +120,28 @@ add_wires!(e11, Pair[
     (input_id(e11), 1) => (ϵbox, 1),
     (ebox, 1)          => (output_id(e11), 1)])
 
-uniq_inv_1 = WiringDiagram(One, Two)
-δbox, i1, i2 = add_boxes!(uniq_inv_1, [δ(), inv, inv])
+uniq_inv_1 = WiringDiagram(Three, Zero)
+δbox, m1, m2, μ1, μ2, eb, ϵbox = add_boxes!(uniq_inv_1, [
+    δ(), mmul, mmul, μ(), μ(), e, ϵ()])
 add_wires!(uniq_inv_1, Pair[
-    (input_id(uniq_inv_1), 1) => (δbox, 1),
-    (δbox, 1)                 => (i1, 1),
-    (δbox, 2)                 => (i2, 1),
-    (i1, 1)                   => (output_id(uniq_inv_1), 1),
-    (i2, 1)                   => (output_id(uniq_inv_1), 2)])
+    (input_id(uniq_inv_1), 1) => (m1, 1),
+    (input_id(uniq_inv_1), 2) => (δbox, 1),
+    (input_id(uniq_inv_1), 3) => (m2, 2),
+    (δbox, 1)                 => (m1, 2),
+    (δbox, 2)                 => (m2, 1),
+    (m1, 1)                   => (μ1, 1),
+    (m2, 1)                   => (μ1, 2),
+    (μ1, 1)                   => (μ2, 1),
+    (eb, 1)                   => (μ2, 2),
+    (μ2, 1)                   => (ϵbox, 1)])
 
-uniq_inv_2 = WiringDiagram(One, Two)
-δbox, ibox = add_boxes!(uniq_inv_2, [δ(), inv]);
+uniq_inv_2 = WiringDiagram(Three, Zero)
+μbox, ϵ1, ϵ2 = add_boxes!(uniq_inv_2, [μ(), ϵ(), ϵ()]);
 add_wires!(uniq_inv_2, Pair[
-    (input_id(uniq_inv_2), 1) => (ibox, 1),
-    (ibox, 1)                 => (δbox, 1),
-    (δbox, 1)                 =>  (output_id(uniq_inv_2), 1),
-    (δbox, 2)                 => (output_id(uniq_inv_2), 2)]);
+    (input_id(uniq_inv_2), 1) => (μbox, 1),
+    (input_id(uniq_inv_2), 2) => (ϵ1, 1),
+    (input_id(uniq_inv_2), 3) => (μbox, 2),
+    (μbox, 1)                 => (ϵ2, 1)]);
 
 div_1 = WiringDiagram(Three, Zero)
 mbox, μbox, ϵbox = add_boxes!(div_1, [mmul, μ(), ϵ()]);
@@ -354,7 +347,8 @@ add_wires!(cmp_2, Pair[
 
 
 # Equations
-mul_assoc  = Eq(:assoc,      mul_assoc_1,  mul_assoc_2,  true);
+mul_assoc  = assoc(mmul);
+cmp_assoc  = assoc(cmp);
 leftid     = Eq(:leftid,     leftid_1,     passthru,     true);
 rightid    = Eq(:rightid,    rightid_1,    passthru,     true);
 leftinv    = Eq(:leftinv,    leftinv_1,    e11,          true);

@@ -189,35 +189,6 @@ function Base.getindex(t::EqTheory, x::Symbol)::Eq
     throw(KeyError(x))
 end
 
-"""
-Pick a particular homomorphism specified by a partial assignment. Fails if
-this does not uniquely specify a particular homomorphism
-"""
-function constrained_homomorphism(
-    x::ACSet{CD},
-    y::ACSet{CD};
-    kw...
-    )::Union{Nothing,ACSetTransformation} where {CD}
-
-    function filt(h)::Bool
-        for (k, v) in collect(kw)
-            for (i, val) in enumerate(v)
-                if !(val===nothing) && h[k](i)!=val
-                    return false
-                end
-            end
-        end
-        return true
-    end
-    hs = filter(filt, homomorphisms(x,y))
-    nh = length(hs)
-    if 0==nh || nh > 1
-        @assert false "Constrained homomorphism found $nh matches"
-    else
-        return hs[1]
-    end
-
-end
 
 """Defined only for monic morphisms"""
 function invert(x::ACSetTransformation)::ACSetTransformation
@@ -262,10 +233,19 @@ end
 
 """
 Apply equality as a rewrite rule
+
+repl = replace one side of an equality with the other, as opposed to just
+adding the other side to a diagram.
+
+forward = the searched pattern is the `l` side of the Eq
+
+n = expected number of homomorphisms (default of -1 means allow any #)
+
+
 """
 function apply_eq(sc_cset::ACSet, T::EqTheory,
                   eq::Symbol; forward::Bool=true, repl::Bool=false,
-                  match::Bool=true,
+                  n::Int=1, monic::Bool=false,
                   kw...#::Vector{Pair{Int,Int}}=Pair{Int,Int}[]
                  )::ACSet
     rule = T[eq]
@@ -305,21 +285,18 @@ function apply_eq(sc_cset::ACSet, T::EqTheory,
     end
 
     # Construct match morphism
-    if isempty(partial)
-        ms = filter(m->valid_dpo(L,m), homomorphisms(pat, sc_cset))
-        if isempty(ms)
-            !match || error("Match expected but none found")
-            return sc_cset
-        end
-    else
-        pdict = Dict(k=>[get(v, i, nothing) for i in 1:nparts(pat, k)]
-                      for (k, v) in collect(partial))
-        ms = [constrained_homomorphism(pat, sc_cset; pdict...)]
-    end
+    pdict = Dict(k=>[get(v, i, nothing) for i in 1:nparts(pat, k)]
+                     for (k, v) in collect(partial))
+    ms = filter(m->valid_dpo(L,m), homomorphisms(pat, sc_cset, monic=monic, initial=pdict))
 
     # could we do a horizontal composition of structured cospan rewrites to
     # do all at once?
     mseq = []
+    n==-1 || length(ms) == n || error("expected $n matches, but found $(length(ms)): $([h.components for h in ms])")
+    if isempty(ms)
+        !match ||
+        return sc_cset
+    end
     h = nothing
 
     for m in ms
