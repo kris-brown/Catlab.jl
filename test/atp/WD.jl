@@ -18,15 +18,18 @@ s    = Box(:s,   [:A],    [:O]);
 t    = Box(:t,   [:A],    [:O]);
 Id   = Box(:Id,  [:O],    [:A]);
 cmp  = Box(:cmp, [:A,:A], [:A]);
+
 o_o  = Box(Symbol("⊗ₒ"), [:O,:O], [:O]);
 o_a  = Box(Symbol("⊗ₐ"), [:A,:A], [:A]);
-ounit= Box(:⊤, Symbol[], [:O])
-σ    = Box(:σ, [:O, :O], [:A])
-del  = Box(:δ, [:O], [:A])
-eps  = Box(:ϵ, [:O], [:A])
-mu   = Box(:μ, [:O], [:A])
-ev   = Box(:ev, [:O, :O], [:A])
+
+ounit= Box(:⊤,    Symbol[], [:O])
+σ    = Box(:σ,    [:O, :O], [:A])
+del  = Box(:δ,    [:O],     [:A])
+eps  = Box(:ϵ,    [:O],     [:A])
+mu   = Box(:μ,    [:O],     [:A])
+ev   = Box(:ev,   [:O, :O], [:A])
 Exp   = Box(:exp, [:O, :O], [:O])
+
 lam   = Box(:λ, [:O, :O, :O, :A], [:A])
 
 ϵ(x::Symbol=:X)   = Junction(x, 1, 0)
@@ -228,7 +231,6 @@ add_wires!(rrr, Pair[
 e_wd = WiringDiagram(Zero, One)
 ebox = add_box!(e_wd, e);
 add_wire!(e_wd, (ebox, 1) => (output_id(e_wd), 1));
-
 
 srs = WiringDiagram(Zero, One)
 sbox, rbox, ibox, δbox, m1, m2 = add_boxes!(srs, [
@@ -810,6 +812,7 @@ add_wires!(lam_t2, Pair[
     (input_id(lam_t2), 3) => (expbox,2),
     (input_id(lam_t2), 4) => (e2,1),
     (expbox, 1) => (output_id(lam_t2), 1)])
+
 lam_eqf1 = WiringDiagram([:O,:O,:O,:A],[:A])
 d1,d2,d3,lbox, obox, ibox, ebox, cbox = add_boxes!(lam_eqf1,[
     δ(:O),δ(:O),δ(:O),lam, o_a,Id,ev,cmp])
@@ -915,26 +918,26 @@ braid_s, braid_t = map(braid_ts, tf)
 braid_ots = Eq(:braid_ots, braid_ots_ts(false), braid_ots_ts(true), true);
 
 eps_s, del_s = map(epsdel_s, tf)
-eps_t   = Eq(:eps_o, ed_t_1(true), eps_t_2, true);
-del_t   = Eq(:del_t, ed_t_1(false), del_t_2, true);
+eps_t   = Eq(:eps_o,   ed_t_1(true), eps_t_2, true);
+del_t   = Eq(:del_t,   ed_t_1(false), del_t_2, true);
 eps_coh = Eq(:eps_coh, eps_coh_1, eps_coh_2, true);
 del_coh = Eq(:del_coh, del_coh_1, del_coh_2, true);
 del_nat = Eq(:del_nat, del_nat_1, del_nat_2, true);
-cc1 = Eq(:cc1, cc1_(true, true), cc1_(false, true), true);
-cc2 = Eq(:cc2, cc1_(true, false), cc1_(false, false), true);
-cc3 = Eq(:cc3, cc3_1, cc3_2, true);
-bone = Eq(:bone, delmu(true), idbox, true)
+cc1     = Eq(:cc1, cc1_(true, true), cc1_(false, true), true);
+cc2     = Eq(:cc2, cc1_(true, false), cc1_(false, false), true);
+cc3     = Eq(:cc3, cc3_1, cc3_2, true);
+bone    = Eq(:bone, delmu(true), idbox, true)
 proj1, proj2 = map(projmu, tf)
 frob1, frob2 = map(frob, tf)
-eps_nat = Eq(:epsnat, epsnat1, epsnat2, true)
 
-evs = Eq(:evs, evst1(true), evs2, true)
-evt = Eq(:evt, evst1(false), evt2, true)
-λ_intro = Eq(:λ_intro, lam_intro1, lam_intro2, false)
-lam_s = Eq(:lam_s, lam_st(true), lam_s2, true)
-lam_t = Eq(:lam_t, lam_st(false), lam_t2, true)
-lam_eqf = Eq(:lam_eqf, lam_eqf1, lam_eqf2, true)
-lam_eqg = Eq(:lam_eqg, lam_eqg1, lam_eqg2, true)
+eps_nat = Eq(:epsnat,  epsnat1,       epsnat2,    true)
+evs     = Eq(:evs,     evst1(true),   evs2,       true)
+evt     = Eq(:evt,     evst1(false),  evt2,       true)
+λ_intro = Eq(:λ_intro, lam_intro1,    lam_intro2, false)
+lam_s   = Eq(:lam_s,   lam_st(true),  lam_s2,     true)
+lam_t   = Eq(:lam_t,   lam_st(false), lam_t2,     true)
+lam_eqf = Eq(:lam_eqf, lam_eqf1,      lam_eqf2,   true)
+lam_eqg = Eq(:lam_eqg, lam_eqg1,      lam_eqg2,   true)
 
 # Equation sets
 I_monoid = Set([mul_assoc, leftid, rightid]);
@@ -947,19 +950,20 @@ I_mc     = Set([o_o_assoc, o_a_assoc, o_func_s, o_func_t, o_func_cmp,
 I_smc    = Set([braidbraid, braid_t, braid_s, braid_ots])
 I_crc    = Set([eps_s, del_s, eps_t, del_t, eps_coh, del_coh, del_nat,
                 cc1, cc2, cc3])
-I_dcr = Set([bone, proj1, proj2, frob1, frob2])
-I_cc = Set([eps_nat])
-I_ccc = Set([evs, evt, λ_intro, lam_s, lam_t, lam_eqf, lam_eqg])
+I_dcr    = Set([bone, proj1, proj2, frob1, frob2])
+I_cc     = Set([eps_nat])
+I_ccc    = Set([evs, evt, λ_intro, lam_s, lam_t, lam_eqf, lam_eqg])
 
 # Theories
 T_monoid = EqTheory(Σ_monoid, I_monoid);
-T_group  = union(T_monoid, Σ_group, I_group);
-T_d3h    = union(T_group, Σ_dihedral, I_d3h);
+T_group  = union(T_monoid, Σ_group,    I_group);
+T_d3h    = union(T_group,  Σ_dihedral, I_d3h);
+
 T_reflG  = EqTheory(Σ_reflG, I_reflG);
 T_cat    = union(T_reflG, Σ_cat, I_cat);
-T_mc     = union(T_cat, Σ_mc, I_mc);
-T_smc    = union(T_mc, Σ_smc, I_smc);
-T_crc    = union(T_smc, Σ_crc, I_crc);
-T_dcr    = union(T_crc, Σ_dcr, I_dcr);
-T_cc     = union(T_dcr, Set{Box{Symbol}}(), I_cc)
-T_ccc    = union(T_cc, Σ_ccc, I_ccc)
+T_mc     = union(T_cat,   Σ_mc,  I_mc);
+T_smc    = union(T_mc,    Σ_smc, I_smc);
+T_crc    = union(T_smc,   Σ_crc, I_crc);
+T_dcr    = union(T_crc,   Σ_dcr, I_dcr);
+T_cc     = union(T_dcr,   Σ0,    I_cc)
+T_ccc    = union(T_cc,    Σ_ccc, I_ccc)

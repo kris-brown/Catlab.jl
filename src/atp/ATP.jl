@@ -41,7 +41,7 @@ function check_wd(wd::WD)::Nothing
             sort([ewlen[port], wlen[port]]) == [0, 1] || error("$wd\n"*err)
         end
     end
-    # TODO check typing of ports is consistent
+    # TODO
     # all junctions must have same type for all in/outports
     # external port types must match internal ports they're connected to
 
@@ -190,14 +190,15 @@ function Base.getindex(t::EqTheory, x::Symbol)::Eq
 end
 
 
-"""Defined only for monic morphisms"""
+"""
+Defined only for monic morphisms
+"""
 function invert(x::ACSetTransformation)::ACSetTransformation
     function invert_comp(s::Symbol)::Vector{Int}
         res = Int[]
         for i in 1:nparts(codom(x), s)
             v = findfirst(==(i), collect(x.components[s]))
             if v === nothing
-                # println("missing $s#$i")
                 push!(res, 1)
             else
                 push!(res, v)
@@ -208,8 +209,6 @@ function invert(x::ACSetTransformation)::ACSetTransformation
     d = Dict([s=>invert_comp(s) for s in keys(x.components)])
     return ACSetTransformation(codom(x), dom(x); d...)
 end
-
-
 
 function δsd(x::Symbol)::WD
     wd = WiringDiagram([x], [x,x])
@@ -240,13 +239,11 @@ adding the other side to a diagram.
 forward = the searched pattern is the `l` side of the Eq
 
 n = expected number of homomorphisms (default of -1 means allow any #)
-
-
 """
 function apply_eq(sc_cset::ACSet, T::EqTheory,
                   eq::Symbol; forward::Bool=true, repl::Bool=false,
                   n::Int=1, monic::Bool=false,
-                  kw...#::Vector{Pair{Int,Int}}=Pair{Int,Int}[]
+                  kw...
                  )::ACSet
     rule = T[eq]
     partial = Dict{Symbol, Dict{Int,Int}}([k=>Dict(v)
@@ -293,9 +290,10 @@ function apply_eq(sc_cset::ACSet, T::EqTheory,
     # could we do a horizontal composition of structured cospan rewrites to
     # do all at once?
     mseq = []
-    n==-1 || length(ms) == n || error("expected $n matches, but found $(length(ms)): $([h.components for h in ms])")
+    hcs = [h.components for h in ms]
+    err = "expected $n matches, but found $(length(ms)): $(hcs)"
+    n == -1 || length(ms) == n || error(err)
     if isempty(ms)
-        !match ||
         return sc_cset
     end
     h = nothing
