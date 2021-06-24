@@ -145,7 +145,7 @@ end
 """
 function check_eq(Σ::Set{Box{Symbol}}, e::Eq)::Nothing
     for s in [:outer_in_port_type, :outer_out_port_type]
-        e.l.diagram[s] == e.r.diagram[s] || error("Interfaces of $eq don't match")
+        e.l.diagram[s] == e.r.diagram[s] || error("Interfaces of $e don't match")
     end
     Σd = Dict{Symbol, Pair{Vector{Symbol}, Vector{Symbol}}}([
         b.value => (b.input_ports => b.output_ports) for b in Σ])

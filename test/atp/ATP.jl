@@ -17,38 +17,3 @@ if 1+1==2
     proveresult = prove(T_monoid, idxxid, xx, oriented=true)
     @test !(proveresult === nothing)
 end
-
-# uniqueness of identity
-
-
-# proveresult = prove(T_monoid, e_uniq_1, e_uniq_2,
-#                     oriented=true);
-
-# @test !(proveresult === nothing)
-
-################################################################################
-
-
-
-
-
-# Dihedral groups
-
-
-
-# from this prove (sr)²=1
-#T_d3h_pres1 = add_eq(T_d3h, Eq(:srsinv_rinv, srs,  rinv, true))
-# from this prove srs⁻¹ = r⁻¹
-#T_d3h_pres2 = add_eq(T_d3h, Eq(:sr2_1, sr2, e_wd, true))
-
-##########################################
-# Relation
-
-
-
-##########################################
-# Empty theory
-
-# csp211 = wd_to_cospan(ex211, Σ0)[1];
-# csp211b = wd_to_cospan(ex211b, Σ0)[1];
-# csp211_comp = compose(csp211, csp211b);
