@@ -317,7 +317,7 @@ I   ↓  O
    X2
 """
 function csp_homomorphic(sc_cset1, sc_cset2)::Bool
-    return is_homomorphic(sc_cset1, sc_cset2, isos = [:_I, :_O])
+    return is_homomorphic(sc_cset1, sc_cset2, iso = [:_I, :_O])
 end
 
 """
