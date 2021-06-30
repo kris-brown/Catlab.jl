@@ -328,6 +328,25 @@ function rem_IO!(sc_cset::ACSet)::Nothing
     rem_parts!(sc_cset, :_O, 1:nparts(sc_cset,:_O))
 end
 
+"""
+Remove redundant nodes of a hypergraph. Paradigmatic case:
+
+ ↗[F]↘
+•     •   ... this can be simplified to •→[F]→•
+ ↘[F]↗
+
+A less trivial case, two copies of the following w/ same input and output:
+⟶ [F] ⟶ [G] ⟶
+   ↑        ↓
+  [e]      [X]
+
+Perhaps a search over all pairs of hyperedge legs that emanate from the same
+vertex? Homomorphism queries for each possible subhypergraph?
+"""
+function rem_dups!(sc_cset::ACSet)::Nothing
+    # to do
+end
+
 
 """
 Construct a cospan homomorphism from the following data:
