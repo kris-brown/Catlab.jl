@@ -7,11 +7,9 @@ using Catlab.CategoricalAlgebra.FinSets
 using Catlab, Catlab.Theories, Catlab.CategoricalAlgebra
 using Catlab.Theories: AttrDesc
 
-######################################################################################
-######################################################################################
 # Wiring diagrams
-######################################################################################
-######################################################################################
+#################
+
 A, B, C, D = [:A], [:B], [:C], [:D];
 f,g,h,i = Box(:f, A, B), Box(:g, B, C),Box(:h, C, D), Box(:i, [:D,:B], [:D,:B]);
 
@@ -56,117 +54,10 @@ L=ACSetTransformation(IWD.diagram, LWD.diagram, Box=[1,2]);
 R=ACSetTransformation(IWD.diagram, RWD.diagram, Box=[1,3]);
 m=ACSetTransformation(LWD.diagram, GWD.diagram, Box=[1,2],InPort=[2],OutPort=[1],Wire=[1]);
 @test is_isomorphic(XWD.diagram, rewrite_match(L,R,m))
-# to turn result back into a wiring diagram:
-# result = WiringDiagram([],[]); result.diagram = rewrite_match(L,R,m)
 
-
-
-
-
-######################################################################################
-######################################################################################
-# Petri Nets
-######################################################################################
-######################################################################################
-vectorify(n::Vector) = n
-vectorify(n::Tuple) = length(n) == 1 ? [n] : n
-vectorify(n) = [n]
-state_dict(n) = Dict(s=>i for (i, s) in enumerate(n))
-
-# Petri Nets
-############
-
-@present TheoryPetriNet(FreeSchema) begin
-  (T, S, I, O) :: Ob
-  it::Hom(I,T)
-  is::Hom(I,S)
-  ot::Hom(O,T)
-  os::Hom(O,S)
-end
-
-const AbstractPetriNet = AbstractACSetType(TheoryPetriNet)
-
-add_species!(p::AbstractPetriNet;kw...) = add_part!(p,:S;kw...)
-add_species!(p::AbstractPetriNet,n;kw...) = add_parts!(p,:S,n;kw...)
-add_transition!(p::AbstractPetriNet;kw...) = add_part!(p,:T;kw...)
-add_transitions!(p::AbstractPetriNet,n;kw...) = add_parts!(p,:T,n;kw...)
-add_input!(p::AbstractPetriNet,t,s;kw...) = add_part!(p,:I;it=t,is=s,kw...)
-add_inputs!(p::AbstractPetriNet,n,t,s;kw...) = add_parts!(p,:I,n;it=t,is=s,kw...)
-add_output!(p::AbstractPetriNet,t,s;kw...) = add_part!(p,:O;ot=t,os=s,kw...)
-add_outputs!(p::AbstractPetriNet,n,t,s;kw...) = add_parts!(p,:O,n;ot=t,os=s,kw...)
-sname(p::AbstractPetriNet,s) = (1:ns(p))[s]
-tname(p::AbstractPetriNet,t) = (1:nt(p))[t]
-snames(p::AbstractPetriNet) = map(s->sname(p, s), 1:ns(p))
-tnames(p::AbstractPetriNet) = map(t->tname(p, t), 1:nt(p))
-
-@present TheoryLabelledReactionNet <: TheoryPetriNet begin
-  (Rate, Concentration, Name)::Data
-  rate::Attr(T, Rate)
-  concentration::Attr(S, Concentration)
-  tname::Attr(T, Name)
-  sname::Attr(S, Name)
-end
-
-const AbstractLabelledReactionNet = AbstractACSetType(TheoryLabelledReactionNet)
-const LabelledReactionNetUntyped = ACSetType(TheoryLabelledReactionNet, index=[:it,:is,:ot,:os])
-const LabelledReactionNet{R,C} = LabelledReactionNetUntyped{R,C,Symbol}
-
-LabelledReactionNet{R,C}(n, ts::Vararg{Union{Pair,Tuple}}) where {R,C} = begin
-  p = LabelledReactionNet{R,C}()
-  n = vectorify(n)
-  states = map(first, collect(n))
-  concentrations = map(last, collect(n))
-  state_idx = state_dict(states)
-  add_species!(p, length(states), concentration=concentrations, sname=states)
-  for (i, ((name,rate),(ins,outs))) in enumerate(ts)
-    i = add_transition!(p,rate=rate, tname=name)
-    ins = vectorify(ins)
-    outs = vectorify(outs)
-    add_inputs!(p, length(ins), repeat([i], length(ins)), map(x->state_idx[x], collect(ins)))
-    add_outputs!(p, length(outs), repeat([i], length(outs)), map(x->state_idx[x], collect(outs)))
-  end
-  p
-end
-const EpiRxnNet = LabelledReactionNet{Number,Int}
-
-sir=EpiRxnNet((:S=>100, :I=>1, :R=>0),
-              (:inf,.03)=>((:S,:I)=>(:I,:I)),
-              (:rec,.25)=>(:I=>:R));
-
-seir = EpiRxnNet((:S=>100,:I=>1,:E=>1,:R=>0),
-                 (:inf,.03)=>((:S,:I)=>(:I,:I)),
-                 (:rec,.25)=>(:I=>:R),
-                 (:inc,.1)=>(:E=>:I),
-                 (:exp,.1)=>((:S,:I)=>(:E,:I)));
-Rg = EpiRxnNet((:S=>100,:I=>1,:E=>1),
-               (:exp,.1)=>((:S, :I)=>(:E, :I)),
-               (:inc,.1)=>(:E => :I))
-Lg = EpiRxnNet((:S=>100,:I=>1),)
-
-L=ACSetTransformation(Lg,Lg,S=[1,2]);
-R=ACSetTransformation(Lg,Rg,S=[1,2]);
-m=ACSetTransformation(Lg, sir,S=[1,2]);
-@test is_isomorphic(seir, rewrite_match(L,R,m))
-
-Lg = EpiRxnNet((:S=>100,:I=>1),)
-Rg = EpiRxnNet((:S=>100,:I=>1), (:sus,.1)=>(:I=>:S))
-L=ACSetTransformation(Lg,Lg,S=[1,2]);
-R=ACSetTransformation(Lg,Rg,S=[1,2]);
-m=ACSetTransformation(Lg, seir,S=[1,2]);
-seirs = rewrite_match(L,R,m)
-
-Lg = EpiRxnNet((:I=>1),)
-Rg = EpiRxnNet((:I=>1,:D=>0), (:die,.1)=>(:I=>:D))
-L=ACSetTransformation(Lg,Lg,S=[1]);
-R=ACSetTransformation(Lg,Rg,S=[1]);
-m=ACSetTransformation(Lg, seir,S=[2]);
-seird = rewrite_match(L,R,m)
-
-######################################################################################
-######################################################################################
 # Graphs with attributes
-######################################################################################
-######################################################################################
+########################
+
 @present TheoryDecGraph(FreeSchema) begin
   E::Ob
   V::Ob
@@ -184,49 +75,45 @@ end
 const LabelledDecGraph = ACSetType(TheoryLabelledDecGraph, index=[:src,:tgt])
 
 aI2 = @acset LabelledDecGraph{String} begin
-    V = 2
-    E = 0
-    label = ["a","b"]
+  V = 2
+  E = 0
+  label = ["a","b"]
 end
 
 aarr = @acset LabelledDecGraph{String} begin
-    V = 2
-    E = 1
-
-    src = [1]
-    tgt = [2]
-
-    dec = ["e1"]
-    label = ["a","b"]
+  V = 2
+  E = 1
+  src = [1]
+  tgt = [2]
+  dec = ["e1"]
+  label = ["a","b"]
 end
 
 abiarr = @acset LabelledDecGraph{String} begin
-     V = 2
-     E = 2
-
-     src = [1,2]
-     tgt = [2,1]
-
-     dec = ["e1","rev_e1"]
-     label = ["a","b"]
+  V = 2
+  E = 2
+  src = [1,2]
+  tgt = [2,1]
+  dec = ["e1","rev_e1"]
+  label = ["a","b"]
 end
 
 aspan = @acset LabelledDecGraph{String} begin
-    V = 3
-    E = 2
-    src = [1,1]
-    tgt = [2,3]
-    dec = ["e1","e2"]
-    label = ["a","b","c"]
+  V = 3
+  E = 2
+  src = [1,1]
+  tgt = [2,3]
+  dec = ["e1","e2"]
+  label = ["a","b","c"]
 end
 
 expected = @acset LabelledDecGraph{String} begin
-    V = 3
-    E = 3
-    src = [1,1,2]
-    tgt = [2,3,1]
-    dec = ["e1","e2","rev_e1"]
-    label = ["a","b","c"]
+  V = 3
+  E = 3
+  src = [1,1,2]
+  tgt = [2,3,1]
+  dec = ["e1","e2","rev_e1"]
+  label = ["a","b","c"]
 end
 
 
@@ -240,14 +127,8 @@ m = ACSetTransformation(aarr, aspan, V=[1,2], E=[1]);
 
 @test is_isomorphic(expected, rewrite_match(L, R, m))
 
-
-
-
-######################################################################################
-######################################################################################
 # Graphs
-######################################################################################
-######################################################################################
+########
 
 # Example graphs
 I2 = Graph(2)
@@ -257,14 +138,12 @@ I3 = Graph(3)
 span = Graph(3)
 add_edges!(span, [2,2],[1,3])
 # 1 -> 2
-arr = Graph(2)
-add_edges!(arr, [1],[2])
+arr = path_graph(Graph, 2)
 # 1 <-> 2
 biarr = Graph(2)
 add_edges!(biarr, [1,2],[2,1])
 # 1 -> 2 -> 3 -> 1
-tri = Graph(3)
-add_edges!(tri,[1,2,3],[2,3,1])
+tri = cycle_graph(Graph, 3)
 # 4 <- 1 -> 2 and 2 <- 3 -> 4
 dispan = Graph(4)
 add_edges!(dispan, [1,1,3,3],[2,4,2,4])
@@ -304,17 +183,18 @@ m = CSetTransformation(arr, two_loops, V=[1, 1], E=[1])
 
 # Simplest non-trivial, non-monic exmaple
 @present TheoryFinSet(FreeSchema) begin
-  X :: Ob
+  X::Ob
 end
 const FinSetType = ACSetType(TheoryFinSet)
+
 I, L, G = [FinSetType() for _ in 1:3]
 add_parts!(I,:X,2)
 add_parts!(L,:X,1)
 add_parts!(G,:X,1)
 l = CSetTransformation(I,L,X=[1,1])
 m = CSetTransformation(L,G,X=[1])
-@test dangling_condition(l,m)
-@test id_condition(l,m)
+@test isempty(dangling_condition(l,m))
+@test isempty(vcat(collect(id_condition(l,m))...))
 ik, kg = pushout_complement(l,m)
 # There are 3 functions `ik` that make this a valid P.C.
 # codom=1 with [1,1], codom=2 with [1,2] or [2,1]
@@ -343,21 +223,18 @@ m = CSetTransformation(arr, arr_loop, V=[2,2], E=[2]) # NOT MONIC
 L = CSetTransformation(arr, span, V=[1,2], E=[1]);
 m = CSetTransformation(span, squarediag, V=[2,1,4], E=[1,2]);
 
-@test_throws(AssertionError("Dangling condition violation: E#5 --src--> V#4"),
-             dangling_condition(L,m, fail=true))
+@test (:src, 5, 4) in dangling_condition(L,m)
 
 # violate id condition because two orphans map to same point
 L = CSetTransformation(I2, biarr, V=[1,2]); # delete both arrows
 m = CSetTransformation(biarr, arr_loop, V=[2,2], E=[2,2]);
-@test_throws(AssertionError("E #1+2 both orphaned and sent to 2"),
-             id_condition(L,m, fail=true))
-L = CSetTransformation(arr, biarr, V=[1,2],E=[1]); # delete one arrow
-@test_throws(AssertionError("Nondeleted E #1 in L mapped to deleted val 2 in G"),
-             id_condition(L,m, fail=true))
+@test (:E, 1, 2, 2) in id_condition(L,m)[1]
+L = CSetTransformation(arr, biarr, V=[1,2], E=[1]); # delete one arrow
+@test (:E, 1, 2) in id_condition(L,m)[2]
 
 
 span_triangle = Graph(3); # 2 <- 1 -> 3 (with edge 2->3)
-add_edges!(span_triangle,[1,1,2],[2,3,3]);
+add_edges!(span_triangle,[1,1,2], [2,3,3]);
 
 L = CSetTransformation(arr, tri, V=[1,2], E=[1]);
 m = CSetTransformation(tri, squarediag, V=[2,4,3], E=[3,5,4]);
@@ -371,32 +248,29 @@ k, g = pushout_complement(L, m); # get PO complement to do further tests
 # Check pushout properties 1: apex is the original graph
 @test is_isomorphic(squarediag, pushout(L, k).cocone.apex) # recover original graph
 
-# Check pushout properties 1: The diagram commutes
+# Check pushout properties 2: the diagram commutes
 Lm = compose(L,m);
 kg = compose(k,g);
 for I_node in 1:2
-    @test Lm[:V](I_node) == kg[:V](I_node)
+  @test Lm[:V](I_node) == kg[:V](I_node)
 end
 @test Lm[:E](1) == kg[:E](1)
 
-# FCheck pushout properties 3: for every pair of unmatched things between K and L, they are NOT equal
+# Check pushout properties 3: for every pair of unmatched things between K and L, they are NOT equal
 for K_node in 1:3
-    @test m[:V](3) != g[:V](K_node)
+  @test m[:V](3) != g[:V](K_node)
 end
 
 for K_edge in 2:3
-    @test m[:E](3) != g[:E](K_edge)
+  @test m[:E](3) != g[:E](K_edge)
 end
 
-######################################################################################
-######################################################################################
 # Undirected bipartite graphs
-######################################################################################
-######################################################################################
+#############################
+
 # 1 --- 1
 #    /
 # 2 --- 2
-
 
 z_ = UndirectedBipartiteGraph()
 add_vertices₁!(z_, 2)
@@ -418,12 +292,10 @@ add_vertices₁!(merge, 2)
 add_vertices₂!(merge, 2)
 add_edges!(merge, [1,2], [1,1])
 
-
 Lspan = UndirectedBipartiteGraph()
 add_vertices₁!(Lspan, 1)
 add_vertices₂!(Lspan, 2)
 add_edges!(Lspan, [1,1],[1,2])
-
 
 I = UndirectedBipartiteGraph()
 add_vertices₁!(I, 1)
@@ -437,10 +309,10 @@ m2 = CSetTransformation(Lspan, z_, V₁=[1], V₂=[2,1], E=[2, 1])
 @test is_isomorphic(parallel, rewrite_match(L, R, m1))
 @test is_isomorphic(merge, rewrite_match(L, R, m2))
 
-################################################
-################################################
-################################################
+# Hypergraph homomorphisms
+##########################
 
+"""Theory of Acset schemas"""
 @present TheoryACSetSchema(FreeSchema) begin
   (Name, AttrType) :: Data
   (HomOb, ObOb, AttrOb, DataOb, AIndex, HIndex) :: Ob
@@ -456,8 +328,10 @@ m2 = CSetTransformation(Lspan, z_, V₁=[1], V₂=[2,1], E=[2, 1])
   aname :: Attr(AttrOb,Name)
 end
 
-const MetaCatDesc = ACSetType(TheoryACSetSchema, index=[:hsrc, :htgt, :asrc, :atgt, :hname, :oname, :dname, :aname]){Symbol, DataType}
+const MetaCatDesc = ACSetType(TheoryACSetSchema, index=[
+  :hsrc, :htgt, :asrc, :atgt, :hname, :oname, :dname, :aname]){Symbol, DataType}
 
+"""Theory of Acset instances"""
 @present TheoryACSet <: TheoryACSetSchema begin
   AttrVal :: Data
   (Row, FK, Datum) :: Ob
@@ -469,9 +343,11 @@ const MetaCatDesc = ACSetType(TheoryACSetSchema, index=[:hsrc, :htgt, :asrc, :at
   dval :: Attr(Datum, AttrVal)
 end
 
-const MetaACSet = ACSetType(TheoryACSet,index=[:hsrc, :htgt, :asrc, :atgt, :hname, :oname, :dname, :aname]){Symbol, DataType, Any}
+const MetaACSet = ACSetType(TheoryACSet, index=[
+  :hsrc, :htgt, :asrc, :atgt, :hname, :oname, :dname, :aname]
+  ){Symbol, DataType, Any}
 
-
+"""Theory of Acset transformations"""
 @present TheoryACSetTrans <: TheoryACSetSchema begin
   AttrVal :: Data
 
@@ -497,8 +373,10 @@ const MetaACSet = ACSetType(TheoryACSet,index=[:hsrc, :htgt, :asrc, :atgt, :hnam
   comp :: Hom(Row1, Row2)
 end
 
-const MetaACSetTransformation = ACSetType(TheoryACSetTrans){Symbol, DataType, Any}
+const MetaACSetTransformation = ACSetType(
+  TheoryACSetTrans){Symbol, DataType, Any}
 
+"""Convert an Acset description into its Acset representation"""
 function to_cset(ad::AttrDesc, datatypes::Vector{Any}, inds::Vector{Symbol})::ACSet
   res = MetaCatDesc()
   catdesc, dtypes, anames, asrc, atgt = typeof(ad).parameters
@@ -515,7 +393,8 @@ function to_cset(ad::AttrDesc, datatypes::Vector{Any}, inds::Vector{Symbol})::AC
 end
 
 """
-For each Ob in the cset, copy its table into res (only if the corresponding table in res is empty)
+For each Ob in the cset, copy its table into res
+(only if the corresponding table in res is empty)
 Optionally use a dict to map names from the first schema to the second
 
 Helper function to construct MetaACSetTransformations
@@ -615,7 +494,7 @@ function to_cset(m::ACSetTransformation)::Tuple{ACSet, Dict{Pair{Symbol, Int}, I
 
   # add components
   comps = repeat([0], nparts(res,:Row1))
-  for (k, v) in zip(keys(m.components), m.components)
+  for (k, v) in zip(keys(components(m)), components(m))
     for (i, val) in enumerate(v.func)
       comps[srcdict[k=>i]] = tgtdict[k => val]
     end
@@ -626,7 +505,8 @@ end
 
 
 """
-Given morphisms C1->C3<-C2, induce a morphism between the morphisms via a morphism C1 -> C2
+Given morphisms C1->C3<-C2, induce a morphism between the morphisms
+via a morphism C1 -> C2
 
 Helper function to construct HΣrewrite
 """
@@ -636,14 +516,15 @@ function transformation_of_transformations(m1::ACSetTransformation, m2::ACSetTra
                 for comp in [:HomOb,:ObOb,:AttrOb, :DataOb, :AIndex, :HIndex]])
   r1, fk1, d1 = [repeat([0], nparts(m1_,x)) for x in [:Row1, :FK1, :Datum1]]
   r2, fk2, d2 = [collect(1:nparts(m2_,x)) for x in [:Row2, :FK2, :Datum2]]
-  for (k, vs) in zip(keys(msrc.components), msrc.components)
+  for (k, vs) in zip(keys(components(msrc)), components(msrc))
     for (i, v) in enumerate(vs.func)
-        r1[src1[k => i]] = src2[k => v]
-        # this will fail if msrc.domain has any FKs / attributes
-        # for our example below, this is ok
+      r1[src1[k => i]] = src2[k => v]
+      # this will fail if msrc.domain has any FKs / attributes
+      # for our example below, this is ok
     end
   end
-  for (k, v) in zip([r1, fk1, d1, r2, fk2, d2], [:Row1, :FK1, :Datum1, :Row2, :FK2, :Datum2])
+  for (k, v) in zip([r1, fk1, d1, r2, fk2, d2],
+                    [:Row1, :FK1, :Datum1, :Row2, :FK2, :Datum2])
     comps[v] = k
   end
   res = ACSetTransformation(m1_, m2_; comps...)
@@ -690,25 +571,25 @@ end
 (m1_,Hdict, HΣdict) = to_cset(ϕ);
 
 HL = @acset HypergraphP{Symbol} begin
-V = 5
-E₂₁ = 2
-s₁ = [1,3]
-s₂ = [2,4]
-t₁ = [3,5]
-Label₂ = [:plus,:plus]
+  V = 5
+  E₂₁ = 2
+  s₁ = [1,3]
+  s₂ = [2,4]
+  t₁ = [3,5]
+  Label₂ = [:plus,:plus]
 end
 
 HK = @acset HypergraphP{Symbol} begin
-V = 3
+  V = 3
 end
 
 HR = @acset HypergraphP{Symbol} begin
-V = 5
-E₂₁ = 2
-s₁ = [2,1]
-s₂ = [3,4]
-t₁ = [4,5]
-Label₂ = [:plus,:plus]
+  V = 5
+  E₂₁ = 2
+  s₁ = [2,1]
+  s₂ = [3,4]
+  t₁ = [4,5]
+  Label₂ = [:plus,:plus]
 end
 
 L = ACSetTransformation(HK, HL, V=[1,2,4])

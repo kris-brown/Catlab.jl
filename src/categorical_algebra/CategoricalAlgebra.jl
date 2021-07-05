@@ -15,7 +15,6 @@ include("StructuredCospans.jl")
 include("CommutativeDiagrams.jl")
 include("DataMigration.jl")
 include("DPO.jl")
-include("CospanRewrite.jl")
 
 @reexport using .FreeDiagrams
 @reexport using .CommutativeDiagrams
@@ -25,6 +24,5 @@ include("CospanRewrite.jl")
 @reexport using .StructuredCospans
 @reexport using .DataMigration
 @reexport using .DPO
-@reexport using .CospanRewrite
 
 end
