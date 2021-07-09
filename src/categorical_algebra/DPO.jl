@@ -160,26 +160,26 @@ if e1 is not matched but either 1 and 2 are deleted, then e1 is dangling
 """
 function dangling_condition(L::ACSetTransformation{CD, AD},
                             m::ACSetTransformation{CD, AD}) where {CD, AD}
-  orphans, res = Dict(), []
+  to_delete, res = Dict(), []
   for comp in keys(components(L))
     image = Set(collect(L[comp]))
-    orphans[comp] = Set(
+    to_delete[comp] = Set(  # m(L/l(I))
       map(x->m[comp](x),
         filter(x->!(x in image),
           parts(codom(L), comp))))
+    println("to_delete $comp $(to_delete[comp])")
   end
+
   # check that for all morphisms in C, we do not map to an orphan
   for (morph, src_ind, tgt_ind) in zip(hom(CD), dom(CD), codom(CD))
     src_obj = ob(CD)[src_ind] # e.g. :E, given morph=:src in graphs
     tgt_obj = ob(CD)[tgt_ind] # e.g. :V, given morph=:src in graphs
-    n_src = parts(codom(m), src_obj)
-    unmatched_vals = setdiff(n_src, collect(m[src_obj]))
-    unmatched_tgt = map(x -> m.codom[morph][x], collect(unmatched_vals))
-    for unmatched_val in setdiff(n_src, collect(m[src_obj]))  # G/m(L) src
-      unmatched_tgt = m.codom[morph][unmatched_val]
-      if unmatched_tgt in orphans[tgt_obj]
-        push!(res, (morph, unmatched_val, unmatched_tgt))
-      end
+    src_del, tgt_del = [collect(to_delete[x]) for x in [src_obj, tgt_obj]]
+    preimg = Set(vcat(incident(codom(m), tgt_del, morph)...))
+    dangling = setdiff(preimg, src_del)
+    if !isempty(dangling) # preimg ⊈ src_del
+      println("DANGLE $morph $dangling")
+      push!(res, (morph, dangling))
     end
   end
   return res

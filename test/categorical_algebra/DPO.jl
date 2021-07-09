@@ -223,7 +223,7 @@ m = CSetTransformation(arr, arr_loop, V=[2,2], E=[2]) # NOT MONIC
 L = CSetTransformation(arr, span, V=[1,2], E=[1]);
 m = CSetTransformation(span, squarediag, V=[2,1,4], E=[1,2]);
 
-@test (:src, 5, 4) in dangling_condition(L,m)
+@test (:src, Set([5])) in dangling_condition(L,m)
 
 # violate id condition because two orphans map to same point
 L = CSetTransformation(I2, biarr, V=[1,2]); # delete both arrows

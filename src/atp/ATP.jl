@@ -12,21 +12,21 @@ using Catlab.CategoricalAlgebra.DPO: rewrite_match_data
 using AutoHashEquals
 using DataStructures: IntDisjointSets, find_root
 
-WD = WiringDiagram{Any,Any,Any,Any}
+WD = WiringDiagram#{Any,Any,Any,Any}
 WDPair = Pair{WiringDiagram{Any,Any,Any,Any},
               WiringDiagram{Any,Any,Any,Any}}
 
 """
 An equation for a partial theory. May or may not be reversible.
 """
-function check_wd(wd::WD)::Nothing
+function check_wd(wd::WiringDiagram)::Nothing
     d = wd.diagram
     # no pass through wires
     nparts(d, :PassWire) == 0 || error("$wd has a passthrough wire")
     # Every external port has exactly one external wire
     for (w, W, p) in [(:in_src,:InWire, :OuterInPort),
                       (:out_tgt, :OutWire, :OuterOutPort)]
-        nparts(d, W) == nparts(d, p) || error("#$W != #$p")
+        nparts(d, W) == nparts(d, p) || error("#$W != #$p\n$d")
         err = "$w indices: $(d.indices[w]) - not all length 1"
         all(x->length(x)==1, d.indices[w]) || error(err)
     end
@@ -47,21 +47,39 @@ function check_wd(wd::WD)::Nothing
 
 end
 
+"""
+Stick a junction in pass through wires
+"""
+function passthru_fix!(wd::WiringDiagram)::Nothing
+d = wd.diagram
+for pt in parts(d, :PassWire)
+    i = d[:pass_src][pt]
+    b = add_box!(wd, Junction(d[:outer_in_port_type][i], 1, 1))
+    add_wires!(wd, [(input_id(wd), i) => (b,1),
+                    (b,1) => (output_id(wd), d[:pass_tgt][pt])])
+end
+rem_parts!(d, :PassWire, parts(d, :PassWire))
+return nothing
+end
+
 @auto_hash_equals struct Eq
     name::Symbol
-    l::WD
-    r::WD
+    l::WiringDiagram
+    r::WiringDiagram
     rev::Bool
     function Eq(n,l,r,v)
         for ext in [:OuterInPort, :OuterOutPort]
             err = "$n has different # of $ext in left and right patterns"
             @assert nparts(l.diagram, ext) == nparts(r.diagram, ext) err
         end
+        map(passthru_fix!, [l, r])
+        map(add_junctions!, [l, r])
         check_wd(l)
         check_wd(r)
         return new(n,l,r,v)
     end
 end
+Eq(n,l,r) = Eq(n,l,r,true)
 function Base.isless(x::Eq, y::Eq)::Bool
     return Base.isless(x.name, y.name)
 end
@@ -760,11 +778,11 @@ function cospan_to_wd(csp::ACSet{CD})::WD where{CD}
     return res
 end
 
-function label(wd::WD;
+function label(wd::WiringDiagram;
                w::Union{Vector{Pair{Int, String}}, Vector{String}}=String[],
                i::Union{Vector{Pair{Int, String}}, Vector{String}}=String[],
                o::Union{Vector{Pair{Int, String}}, Vector{String}}=String[],
-              )::WD
+              )::WiringDiagram
 
     wd_ = deepcopy(wd)
     d = wd_.diagram
@@ -791,4 +809,32 @@ function label(wd::WD;
         set_subpart!(d, :outer_in_port_type, to_vec(i, :InWire))
     end
     return wd_
+end
+
+
+"""
+Is there a path from input to output that only passes through the designated
+boxes? Propagate reachability information backwards, then check if inputs
+are included.
+"""
+function path_exists(wd::WD, bs::Set{Int})::Vector{Float64}
+    reachable = Set()
+end
+
+"""
+For all possible subsets of boxes, compute its cost (sum up primcosts) and
+check if it is a feasible computation (inputs are connected to outputs).
+
+Return a WD with only the boxes of the minimum cost feasible WD.
+"""
+function mincost(wd::WD, primcosts::Dict{Symbol, Float64})::WD
+    wd = deepcopy(wd)
+    all_boxes = Set(boxes(wd))
+    res = [b for b in powerset(all_boxes) if path_exists(wd, sub_set)]
+    mcost, mind = findmin([sum([primcosts[wd[:box_value][bx] for bx in bxs]])
+                          for bxs in res])
+    # keep just the boxes in min cost boxes
+    keepboxes = Set(res[mind])
+    rem_boxes!(wd, sort([b for b in all_boxes if b ∉ keepboxes]))
+    return wd
 end

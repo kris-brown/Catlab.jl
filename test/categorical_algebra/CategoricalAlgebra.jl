@@ -44,13 +44,6 @@ end
 @testset "DataMigration" begin
   include("DataMigration.jl")
 end
-@testset "DPO" begin
-  include("DPO.jl")
-end
-
-@testset "CospanRewrite" begin
-  include("CospanRewrite.jl")
-end
 
 @testset "DPO" begin
   include("DPO.jl")
