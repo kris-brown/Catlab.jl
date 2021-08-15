@@ -167,7 +167,7 @@ function parse_relation_context(context)
     @match term begin
       Expr(:(::), var::Symbol, type::Symbol) => (var => type)
       var::Symbol => var
-      _ => error("Invalid syntax in term $expr of context")
+      _ => error("Invalid syntax in term $term of context")
     end
   end
   if vars isa AbstractVector{Symbol}

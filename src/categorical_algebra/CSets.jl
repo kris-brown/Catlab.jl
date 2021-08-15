@@ -160,6 +160,10 @@ force(α::ACSetTransformation) = map_components(force, α)
 # Finding C-set transformations
 ###############################
 
+function inVal(v::Type{NamedTuple{V}}, x::Symbol)::Bool where {V}
+  return x in V
+end
+
 """ Find a homomorphism between two attributed ``C``-sets.
 
 Returns `nothing` if no homomorphism exists. For many categories ``C``, the
@@ -211,8 +215,8 @@ function homomorphisms(X::AbstractACSet{CD,AD}, Y::AbstractACSet{CD,AD};
   results
 end
 homomorphisms(f, X::AbstractACSet, Y::AbstractACSet;
-              monic=false, iso=false, initial=(;)) =
-  backtracking_search(f, X, Y, monic=monic, iso=iso, initial=initial)
+              monic=false, iso=false, initial=(;), inexact=(;)) =
+  backtracking_search(f, X, Y, monic=monic, iso=iso, initial=initial, inexact=inexact)
 
 """ Is the first attributed ``C``-set homomorphic to the second?
 
@@ -247,7 +251,7 @@ is_isomorphic(X::AbstractACSet, Y::AbstractACSet; kw...) =
 
 """ Internal state for backtracking search for ACSet homomorphisms.
 """
-struct BacktrackingState{CD <: CatDesc, AD <: AttrDesc{CD},
+struct BacktrackingState{CD <: CatDesc, AD <: AttrDesc{CD}, X,
     Assign <: NamedTuple, PartialAssign <: NamedTuple,
     Dom <: AbstractACSet{CD,AD}, Codom <: AbstractACSet{CD,AD}}
   """ The current assignment, a partially-defined homomorphism of ACSets. """
@@ -256,6 +260,7 @@ struct BacktrackingState{CD <: CatDesc, AD <: AttrDesc{CD},
   assignment_depth::Assign
   """ Inverse assignment for monic components or if finding a monomorphism. """
   inv_assignment::PartialAssign
+  inexact::Val{X}
   """ Domain ACSet: the "variables" in the CSP. """
   dom::Dom
   """ Codomain ACSet: the "values" in the CSP. """
@@ -263,7 +268,7 @@ struct BacktrackingState{CD <: CatDesc, AD <: AttrDesc{CD},
 end
 
 function backtracking_search(f, X::AbstractACSet{CD}, Y::AbstractACSet{CD};
-                             monic=false, iso=false, initial=(;)) where {Ob, CD<:CatDesc{Ob}}
+                             monic=false, iso=false, inexact=Vector{Symbol}(), initial=(;)) where {Ob, CD<:CatDesc{Ob}}
   # Fail early if no monic/isos exist on cardinality grounds.
   if iso isa Bool
     iso = iso ? Ob : ()
@@ -285,7 +290,9 @@ function backtracking_search(f, X::AbstractACSet{CD}, Y::AbstractACSet{CD};
   assignment_depth = map(copy, assignment)
   inv_assignment = NamedTuple{Ob}(
     (c in monic ? zeros(Int, nparts(Y, c)) : nothing) for c in Ob)
-  state = BacktrackingState(assignment, assignment_depth, inv_assignment, X, Y)
+
+  state = BacktrackingState(assignment, assignment_depth, inv_assignment,
+                            Val(NamedTuple{tuple(inexact...)}), X, Y)
 
   # Make any initial assignments, failing immediately if inconsistent.
   for (c, c_assignments) in pairs(initial)
@@ -356,10 +363,12 @@ end
 Returns whether the assignment succeeded. Note that the backtracking state can
 be mutated even when the assignment fails.
 """
-@generated function assign_elem!(state::BacktrackingState{CD,AD}, depth,
-                                 ::Type{Val{c}}, x, y) where {CD, AD, c}
+@generated function assign_elem!(state::BacktrackingState{CD,AD,inexact}, depth,
+                                 ::Type{Val{c}}, x, y) where {CD, AD, c, inexact}
   out_hom = [ f => codom(CD, f) for f in hom(CD) if dom(CD, f) == c ]
-  out_attr = [ f for f in attr(AD) if dom(AD, f) == c ]
+
+  out_attr = [ f for f in attr(AD) if dom(AD, f) == c]
+
   quote
     y′ = state.assignment.$c[x]
     y′ == y && return true  # If x is already assigned to y, return immediately.
@@ -372,6 +381,7 @@ be mutated even when the assignment fails.
     # Check attributes first to fail as quickly as possible.
     X, Y = state.dom, state.codom
     $(map(out_attr) do f
+        inVal(inexact, f) ||
         :(subpart(X,x,$(quot(f))) == subpart(Y,y,$(quot(f))) || return false)
       end...)
 

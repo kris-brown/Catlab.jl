@@ -167,7 +167,6 @@ function dangling_condition(L::ACSetTransformation{CD, AD},
       map(x->m[comp](x),
         filter(x->!(x in image),
           parts(codom(L), comp))))
-    println("to_delete $comp $(to_delete[comp])")
   end
 
   # check that for all morphisms in C, we do not map to an orphan
