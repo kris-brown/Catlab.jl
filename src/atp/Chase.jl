@@ -7,7 +7,8 @@ using Catlab.Programs.RelationalPrograms: parse_relation_context, parse_relation
 
 using Catlab.CategoricalAlgebra.FinSets
 using Catlab.CategoricalAlgebra.CSetDataStructures: AttributedCSet
-using DataStructures: IntDisjointSets, find_root!
+using DataStructures: IntDisjointSets, find_root!, in_same_set
+using Dates
 
 struct Schema
   arities::Dict{Symbol, Int}
@@ -25,12 +26,14 @@ function schema_to_csettype(sch::Schema)
 
   Id, Name = [FreeSchema.Data{:generator}([x], []) for x in [:Id, :Name]]
   add_generator!(pres, Id)
+  add_generator!(pres, Name)
 
   relobs = [Ob(FreeSchema, s) for s in keys(sch.arities)]
   vob = Ob(FreeSchema, :V)
 
   add_generator!(pres, vob)
   add_generator!(pres, FreeSchema.Attr{:generator}([:id_V, vob, Id], [vob, Id]))
+  add_generator!(pres, FreeSchema.Attr{:generator}([:sort, vob, Name], [vob, Name]))
 
   for x in relobs
     add_generator!(pres, x)
@@ -47,7 +50,7 @@ function schema_to_csettype(sch::Schema)
 
   cset = ACSetType(pres, index=vcat([:id_V],
                    map(ids, collect(keys(sch.arities)))))
-  return ACSetType(pres){Int}, cset{Int}
+  return ACSetType(pres){Int, Symbol}, cset{Int, Symbol}
 end
 
 """
@@ -55,26 +58,44 @@ Dependency: When the body pattern is seen, the result pattern is asserted to
 exist and eqs hold between subsets of the body variables.
 """
 struct Dep
+  name :: Symbol
   body :: ACSet
   res :: ACSet
   eqs :: Set{Set{Int}}
 end
 
-function Dep(body::ACSet,res::ACSet)::Dep
-  return Dep(body,res,Set{Set{Int}}())
+function Dep(name::Symbol, body::ACSet,res::ACSet)::Dep
+  return Dep(name, body,res,Set{Set{Int}}())
 end
 
-struct restricted_chase
-  I::ACSet
-  It::Type
-  Σ::Set{Dep}
+mutable struct Sequence{State,Params}
+  state::State
+  params::Params
+  func::Function
 end
 
-struct chase_state
-  I::ACSet
-  dI::ACSet
-  counter::Int
+"""
+Give a sequence of rules to run. The last iteration of rules will be repeated.
+"""
+function seq(s::Vector{Vector{Symbol}})::Function
+  !isempty(s) || error("s cannot be empty")
+  function f(Σ, i, _, _, _)
+    ds = s[min(i, end)]
+    return isempty(ds) ? Σ : [getdep(Σ, d) for d in ds]
+  end
+  return f
 end
+
+
+
+allseq = seq([Symbol[]])
+
+function sizes(x::ACSet{CD}) where {CD}
+  [o=>nparts(x,o) for o in ob(CD)]
+end
+
+getdep(Σ::Set{Dep}, name::Symbol)::Dep = only([d for d in Σ if d.name==name])
+
 
 function maxes(x::ACSet{CD})::Dict{Symbol, Int} where {CD}
   Dict([o => max0(x[ids(o)]) for o in ob(CD)])
@@ -85,8 +106,36 @@ function merge_maxes(d1::Dict{Symbol, Int},
   Dict([o => max(d1[o], d2[o]) for o in keys(d1)])
 end
 
-Base.isempty(rc::chase_state) = sum(nparts(rc.dI, o)
-  for o in filter(!=(:V), ob(typeof(rc.dI).parameters[1]))) == 0
+Base.isempty(dI::ACSet) = sum(nparts(dI, o)
+  for o in filter(!=(:V), ob(typeof(dI).parameters[1]))) == 0
+
+"""Adds content of y to x"""
+function addstuff!(X::ACSet{CD}, Y::ACSet{CD})::Nothing where {CD}
+  xids = Set(X[:id_V])
+  xmap = Int[]
+  for (vi, vsrt) in Y.tables[:V]
+    if vi ∈ xids
+      nxt = only(incident(X, vi, :id_V))
+    else
+      nxt = add_part!(X, :V, id_V=vi, sort=vsrt)
+    end
+    push!(xmap, nxt)
+  end
+  mxs= maxes(X)
+  for o in filter(!=(:V), ob(CD))
+    oseen = Set([collect(r)[1:end-1] for r in X.tables[o]])
+    for r in Y.tables[o]
+      cr = collect(r)
+      newx = xmap[cr[1:end-1]]
+      if newx ∉ oseen
+        push!(oseen, newx)
+        push!(newx, cr[end]+mxs[o])
+        add_part!(X, o; Dict(zip(keys(r), newx))...)
+      end
+    end
+  end
+  return nothing
+end
 
 function Base.union(x::ACSet{CD}, y::ACSet{CD})::ACSet{CD} where {CD}
   if nparts(x, :V) == 0 return y
@@ -111,19 +160,22 @@ function Base.union(x::ACSet{CD}, y::ACSet{CD})::ACSet{CD} where {CD}
   return res
 end
 
-"""Computes d1;d2 as functions"""
-# function compdict(d1::Dict{Int,Int}, d2::Dict{Int,Int})::Dict{Int,Int}
-#   res = deepcopy(d2)
-#   for (k, v) in collect(d1)
-#     res[k] = get(d2, v, v)
-#   end
-#   return filter(x->x[1]!=x[2], res)
-# end
-# appdict(d::Dict{Int,Int}, v::Vector{Int}) = [get(d, x, x) for x in v]
-# appdict(d::Dict{Int,Int}, v::Set{Int}) = Set([get(d, x, x) for x in collect(v)])
-unionfind_to_dict(d::IntDisjointSets, idvec::Vector{Int})::Dict{Int,Int} = Dict(
-  [idvec[k]=>idvec[v] for (k, v) in [
-  x => find_root!(d, x) for x in 1:length(d)] if k!=v])
+function unionfind_to_dict(d::IntDisjointSets, idvec::Vector{Int})::Dict{Int,Int}
+  dic, mins = Dict{Int, Int}(), Set{Int}()
+  for i in 1:length(d)
+    iid = idvec[i]
+    for m in mins
+      if in_same_set(d, i, m)
+        dic[iid] = idvec[m]
+        break
+      end
+    end
+    if !haskey(dic, iid)
+      push!(mins, i)
+    end
+  end
+  return dic
+end
 """
 Apply a mapping to a DB instance. The mapping refers to V id's. {a ↦ b}
 collapses the vertex identified by `a` into the vertex identified by `b`.
@@ -138,26 +190,55 @@ function appdict(d::Dict{Int,Int}, I::ACSet{CD})::ACSet{CD} where {CD}
       for (k, v) in filter(x->x[1]!=ids(o), collect(zip(keys(r), r)))
         v_id = I_[:id_V][v]
         new_v_id = get(d, v_id, v_id)
-        # println("o $o i $i r $r k $k v_id $v_id I_[id_V] new_v_id $new_v_id | $(I_[:id_V])")
         new_v_ = incident(I_, new_v_id, :id_V)
-        new_v = isempty(new_v_) ? add_part!(I_, :V, id_V=new_v_id) : only(new_v_)
+        new_v = (isempty(new_v_)
+                ? add_part!(I_, :V, id_V=new_v_id, sort=I_[:sort][v])
+                : only(new_v_))
         push!(seenV, new_v)
         set_subpart!(I_, i, k, new_v)
       end
       new_r = collect(I_.tables[o][i])[1:end-1]
-      # println("o $o i $i new_r $new_r")
       if new_r in seen
         push!(del_list, i)
       else
         push!(seen, new_r)
       end
     end
-    # println("Del list $o $del_list")
     rem_parts!(I_, o, del_list)
   end
   rem_parts!(I_, :V, sort(collect(setdiff(parts(I_, :V), seenV))))
   return I_
 end
+
+function appdict!(d::Dict{Int,Int}, I::ACSet{CD})::Nothing where {CD}
+  seenV = Set{Int}()
+  for o in filter(!=(:V), ob(CD))
+    del_list, seen = Int[], Set()
+    for (i, r) in enumerate(I.tables[o])
+      for (k, v) in filter(x->x[1]!=ids(o), collect(zip(keys(r), r)))
+        v_id = I[:id_V][v]
+        new_v_id = get(d, v_id, v_id)
+        new_v_ = incident(I, new_v_id, :id_V)
+        new_v = (isempty(new_v_)
+                ? add_part!(I, :V, id_V=new_v_id, sort=I[:sort][v])
+                : only(new_v_))
+        push!(seenV, new_v)
+        set_subpart!(I, i, k, new_v)
+      end
+      new_r = collect(I.tables[o][i])[1:end-1]
+      if new_r in seen
+        push!(del_list, i)
+      else
+        push!(seen, new_r)
+      end
+    end
+    rem_parts!(I, o, del_list)
+  end
+  rem_parts!(I, :V, sort(collect(setdiff(parts(I, :V), seenV))))
+  return nothing
+end
+
+appdict(d::Dict{Int,Int}, v::Vector{Int})::Vector{Int} = [get(d, x, x) for x in v]
 
 max0 = x -> isempty(x) ? 0 : maximum(x)
 
@@ -210,65 +291,187 @@ function trim!(I::ACSet{CD})::Nothing where {CD}
   return nothing
 end
 
-function Base.iterate(IΣ::restricted_chase)::Tuple{ACSet, chase_state}
-  iterate(IΣ, chase_state(IΣ.I, IΣ.I, 1))
+# function Base.iterate(IΣ::restricted_chase)::Tuple{Tuple{ACSet, Dict{Int,Int}}, chase_state}
+#   iterate(IΣ, chase_state(IΣ.I, IΣ.I, 1))
+# end
+
+# function Base.iterate(IΣ::core_chase)::Tuple{Tuple{ACSet, Dict{Int,Int}}, core_chase_state}
+#   iterate(IΣ, core_chase_state(IΣ.I, 1, Dict([k.name=>Dict([o=>Set{Int}()
+#      for o in IΣ.It.body.body.parameters[1].parameters[1]]) for k in IΣ.Σ]), false))
+# end
+
+
+"""
+Terminate determines how many chase iterations to do.
+Sequence determines what dependencies to trigger each iteration
+"""
+function core_chase(I::ACSet{CD}, Σ::Set{Dep}, Select::Function=allseq,
+                    Terminate::Function=(_,_,_,_)->false, maxi::Int=3) where {CD}
+  m, seen = Dict{Int,Int}(), Dict{Symbol, Dict{Symbol, Set{Int}}}([
+    d.name=>Dict([o=>Set{Int}() for o in ob(CD)]) for d in Σ])
+  for i in 1:maxi
+    println("--------Iteration $i--------")
+    μ, N = IntDisjointSets(nparts(I, :V)), ACSet{typeof(I).parameters...}()
+    for τ in Select(Σ, i, I, N, μ)
+      core_apply_trigger!(I, τ, seen[τ.name], N, μ)
+    end
+    m = unionfind_to_dict(μ, I[:id_V])
+    appdict!(m, I)
+    appdict!(m, N)
+    addstuff!(I, N)
+    # I = findcore(I; loose=true)
+    if Terminate(I, N, m, i)
+      return (I, m)
+    end
+  end
+  return (I, m)
 end
 
-function Base.iterate(IΣ::restricted_chase, state::Union{Nothing,chase_state}
-                      )::Union{Nothing, Tuple{ACSet, chase_state}}
-  if isempty(state) # Terminate
-    return nothing
-  else # Normal
-    I, ∆I, counter = state.I, state.dI, state.counter
-  end
-  println("counter = $counter\nI=$I\n∆I=$∆I")
-  N = IΣ.It() # new changes from TGDs
-  μ = IntDisjointSets(nparts(I, :V))
-  for τ in IΣ.Σ
-    for trig in query(I, tgd_relation(τ.body)[1])
-      #println("potential trigger in I $trig")
-      # make sure trigger at least somewhat pertains to the 'unknown' subset of I
-      d = zip([parse(Int, string(k)[2:end]) for k in keys(trig)], trig)
-      d2 = Dict([k=>I[:id_V][v] for (k,v) in d])
-      if !isempty(intersect(values(d2), ∆I[:id_V]))  # ACTUALLY we should check that any of the relations intersect, not the vertices. Requires change to output of query
+# function Base.iterate(IΣ::restricted_chase, state::Union{Nothing,chase_state}
+#                       )::Union{Nothing, Tuple{Tuple{ACSet, Dict{Int,Int}}, chase_state}}
+#   if isempty(state.dI) # Termination condition
+#     return nothing
+#   else # Normal unpacking of state
+#     I, ∆I, counter, s = state.I, state.dI, state.counter, IΣ.S
+#     N, μ = IΣ.It() , IntDisjointSets(nparts(I, :V))
+#   end
+#   ∆I = I # until we figure out how to do triggerwise-∆I
+#   println("counter $counter")
+#   while true
+#     τ = select(s, IΣ.Σ, counter, I, ∆I, N, μ)
+#     if τ===nothing break end
+#     N, μ =  apply_trigger(I, τ, ∆I, N, μ)
+#   end
+#   m = unionfind_to_dict(μ, I[:id_V])
+#   I, ∆I = update_inst(I, ∆I, N, m)
+#   return (I, m), chase_state(I, ∆I, counter+1) # output, new_state
+# end
+# Base.IteratorSize(::restricted_chase) = Base.IsInfinite()
+# Base.IteratorSize(::core_chase) = Base.IsInfinite()
 
-        # Quotient by equivalences
-        for eqset in τ.eqs
-          eqids = [only(incident(I, d2[x], :id_V)) for x in eqset]
-          for (x, y) in zip(eqids, eqids[2:end])
-            union!(μ, x, y)
+apply_trigger(I::ACSet, τ::Dep)=apply_trigger(
+  I, τ, I, ACSet{typeof(I).parameters...}(), IntDisjointSets(nparts(I, :V)))
+
+function update_inst(I::ACSet, ∆I::ACSet, N::ACSet, μ::Dict{Int,Int})
+  ∆I = appdict(μ, N) # TODO understand what line 14 means
+  # prune!(∆I, setdiff(Set(N[:id_V]), Set(I[:id_V])))
+  I = union(appdict(μ, I), ∆I)
+  return I, ∆I
+end
+
+# function apply_trigger(I::ACSet, τ::Dep, ∆I::ACSet, N::ACSet, μ::IntDisjointSets)
+#   print("applying $(τ.name)")
+#   q, ps = tgd_relation(τ.body,  Dict{Int,Int}())
+#   trigs = (isempty(τ.body) ? [NamedTuple()] : query(I, q, ps))
+#   println("$(length(trigs)) potential triggers")
+#   for (i, trig) in enumerate(trigs)
+#     print("$i ")
+#     #println("potential trigger in I $trig")
+#     # make sure trigger at least somewhat pertains to the 'unknown' subset of I
+#     d = zip([parse(Int, string(k)[2:end]) for k in keys(trig)], trig)
+#     d2 = Dict{Int,Int}([k=>I[:id_V][v] for (k,v) in d])
+
+#     # ACTUALLY we should check that any of the relations intersect,
+#     # not the vertices (?) Would require change to output of query. TODO
+#     if isempty(τ.body) || !isempty(intersect(values(d2), ∆I[:id_V]))
+#       # print("[relevant trigger]")
+#       # Quotient by equivalences
+#       for eqset in τ.eqs
+#         eqids = [only(incident(I, d2[x], :id_V)) for x in eqset]
+#         # println("unioning $eqids")
+#         for (x, y) in zip(eqids, eqids[2:end])
+#           union!(μ, x, y)
+#         end
+#       end
+
+#       # Add to graph if needed
+#       if nparts(τ.res, :V) > 0
+#         q, ps = tgd_relation(τ.res, d2)
+#         uI = appdict(unionfind_to_dict(μ, I[:id_V]), I ∪ N)
+#         if isempty(query(uI, q, ps))  # THIS SHOULD JUST BE A IS_HOMOMORPHIC CHECK
+#           # println("active tgd trigger w/ $d2")
+#           newstuff = fresh(d2, τ.res, merge_maxes(maxes(N), maxes(I)))
+#           # println("newstuff $newstuff")
+#           N = N ∪ newstuff
+#         end
+#       end
+#     end
+#   end
+#   println("")
+#   return N, μ
+# end
+
+function core_apply_trigger!(I::ACSet{CD}, τ::Dep, seen::Dict{Symbol, Set{Int}},
+                             N::ACSet, μ::IntDisjointSets)::Nothing where {CD}
+  print("applying $(τ.name) on I = $(sizes(I)) and N = $(sizes(N))")
+  strt = now()
+  q, ps = tgd_relation(τ.body, Dict{Int,Int}())
+  trigs = (isempty(τ.body) ? [NamedTuple()] : query(I, q, ps))
+  println("$(length(trigs)) potential triggers (query time $(now()-strt))")
+  strt = now()
+  for (i, trig) in enumerate(trigs)
+    #print("$i ")
+    # make sure trigger at least somewhat pertains to the 'unknown' subset of I
+    unseen = false
+    d2 = Dict{Int,Int}()
+
+    for (k, v) in zip(keys(trig), trig)
+      ostr, istr = split(string(k), "__")
+      o, i = Symbol(ostr), parse(Int, istr)
+      idv = I[ids(o)][v]
+      if o == :V
+        d2[i] = I[:id_V][v]
+        if !unseen
+          for vid in I[:id_V]
+            if in_same_set(μ, idv, vid) && idv ∉ seen[:V]
+              unseen = true
+              break
+            end
           end
         end
-
+      elseif !unseen && idv ∉ seen[o]
+        unseen = true
+      end
+    end
+    if isempty(τ.body) || unseen
+      # print(" [relevant] ")
+      # Quotient by equivalences
+      for eqset in τ.eqs
+        eqids = [only(incident(I, d2[x], :id_V)) for x in eqset]
+        # print(" unioning $eqids ")
+        for (x, y) in zip(eqids, eqids[2:end])
+          union!(μ, x, y)
+        end
+      end
+      #ttest = appdict(d2, τ.res)
+      resids = Set(τ.res[:id_V])
+      init = (V=Dict([(first(incident(τ.res, k, :id_V)) =>
+                       first(incident(I, v, :id_V)))
+                      for (k,v) in pairs(d2) if k ∈ resids]),)
+      inex = collect(map(ids, ob(CD)))
+      if !is_homomorphic(τ.res, I, initial=init, inexact=inex)
         # Add to graph if needed
         if nparts(τ.res, :V) > 0
-          q, ps = tgd_relation(τ.res, d2)
-          uI = appdict(unionfind_to_dict(μ, I[:id_V]), I ∪ N)
-          if isempty(query(uI, q, ps))
-            #println("active tgd trigger w/ $d2")
-            newstuff = fresh(d2, τ.res, merge_maxes(maxes(N), maxes(I)))
-            println("newstuff $newstuff")
-            N = N ∪ newstuff
-          end
+          newstuff = fresh(d2, τ.res, merge_maxes(maxes(N), maxes(I)))
+          # println("new V ids $(sort(collect(setdiff(newstuff[:id_V], I[:id_V]))))")
+          addstuff!(N, newstuff)
         end
       end
     end
   end
-  μ = unionfind_to_dict(μ, I[:id_V])
-  println("μ = $μ")
-  ∆I = appdict(μ, N) # TODO understand what line 14 means
-  # prune!(∆I, setdiff(Set(N[:id_V]), Set(I[:id_V])))
-  I = union(appdict(μ, I), ∆I)
-  println("end of iteration: I=$I")# \ndI = $∆I")
-  return I, chase_state(I, ∆I, counter+1) # output, new_state
+  println("time: $(now()-strt)")
+  return nothing
 end
-Base.IteratorSize(::restricted_chase) = Base.IsInfinite()
 
-
-function tgd_relation(X::ACSet{CD}, bound::Dict{Int,Int}=Dict{Int,Int}()
-                      )::Tuple{UndirectedWiringDiagram, NamedTuple} where {CD}
-  vars = [Symbol("x$i") for i in X[:id_V]]
-  bodstr, params = ["begin"], Set{String}()
+"""
+Given a DB inst as a pattern, create a conjunctive query that returns its
+matches. Optionally constrain particular vertices to have particular IDs.
+"""
+function tgd_relation(X::ACSet{CD}, bound::Dict{Int,Int})::Tuple{UndirectedWiringDiagram, NamedTuple} where {CD}
+  vars = Dict([o=>[Symbol("$(o)__$i") for i in X[ids(o)]] for o in ob(CD)])
+  typs = ["V(_id=$i, sort=s$i)" for i in vars[:V]]
+  params = Set(["s$i=:$n" for (i, n) in zip(vars[:V], X[:sort])])
+  bodstr = vcat(["begin"], typs)
   for (k, v) in collect(bound)
     bound_ind = findfirst(==(k), X[:id_V])
     if !(bound_ind===nothing)
@@ -278,15 +481,17 @@ function tgd_relation(X::ACSet{CD}, bound::Dict{Int,Int}=Dict{Int,Int}()
   end
   for o in filter(!=(:V), ob(CD))
     for row in X.tables[o]
-      is = enumerate(collect(row)[1:end-1])
-      push!(bodstr, "$o($(join(["$(arg(o,i))=$(vars[v])"
+      is = collect(enumerate(collect(row)))
+      _, oid = pop!(is)
+      push!(bodstr, "$o(_id=$(o)__$oid,$(join(["$(arg(o,i))=$(vars[:V][v])"
                                 for (i, v) in is],",")))")
     end
   end
   push!(bodstr, "end")
-  exstr = "($(join(["$v=$v" for v in vars],",") ))"
+  exstr = "($(join(["$v=$v" for vs in values(vars) for v in vs],",") ))"
   ctxstr = "($(join(vcat(
-    ["$v::V" for v in vars],
+    ["s$v::Symbol" for v in vars[:V]],
+    ["$v::$k" for (k, vs) in pairs(vars) for v in vs],
     collect(Set(["i$v::Int" for v in values(bound)]))
     ),",")))"
   pstr = "($(join(params,",")),)"
@@ -294,48 +499,28 @@ function tgd_relation(X::ACSet{CD}, bound::Dict{Int,Int}=Dict{Int,Int}()
   ctx = Meta.parse(ctxstr)
   hed = Expr(:where, ex, ctx)
   bod = Meta.parse(join(bodstr, "\n"))
-  # println("$exstr\n$ctxstr\n$bodstr\n$pstr")
+  # println("ex $exstr\n ctx $ctxstr\n bod $bodstr\n params $pstr")
   ps = isempty(bound) ? NamedTuple() : eval(Meta.parse(pstr))
-  return parse_relation_diagram(hed, bod), ps
+  res = parse_relation_diagram(hed, bod)
+  # Remove isolated junctions
+  iso = setdiff(parts(res, :Junction), res[:junction])
+  isempty(iso ∩ res[:outer_junction]) || error("$res")
+  rem_parts!(res, :Junction, iso)
+  return res, ps
 end
 
-# Tests
-if 1+1==1
-  sch = Schema(Dict(:R=>2, :A=>1))
-  _, Isch = schema_to_csettype(sch)
-  I = Isch()
-  add_parts!(I, :V, 2, id_V=[101,202])
-  add_parts!(I, :R, 2, R_1=[1,2], R_2=[2,2], id_R=[1001,2002])
-  I2 = deepcopy(I)
-  add_parts!(I2, :V, 1, id_V=[303])
-  add_parts!(I2, :A, 2, A_1=[2,3], id_A=[1000,2000])
-  I3 = deepcopy(I2)
-  add_parts!(I2, :R, 1, R_1=[2], R_2=[3], id_R=[3003]) # x2, y relation
-  add_parts!(I3, :R, 1, R_1=[1], R_2=[3], id_R=[3003]) # x1, y relation
+function findcore(I::ACSet{CD}; loose::Bool=false)::ACSet{CD} where {CD}
+  println("STARTING CORE SEARCH")
+  strt = now()
+  inexact = collect(filter(!=(:id_V), map(ids, ob(CD))))
 
-  t1 = @acset Isch begin
-    V = 2
-    R = 1
-    R_1 = [1]
-    R_2 = [2]
-    id_V = [11, 22]
-    id_R = [241]
-  end
-  t2 = @acset Isch begin
-    V = 3
-    R = 1
-    A = 2
-    R_1 = [1]
-    R_2 = [3]
-    A_1 = [3, 2]
-    id_V = [11,22,33]
-    id_R = [799]
-    id_A = [900, 901]
-  end
-  tgd3 = Dep(t1, t2)
-  egd3 = Dep(t1, Isch(), Set([Set([11,22])]))
-  te = Dep(t1, t2, Set([Set([11,22])]))
-
-  rc = restricted_chase(I, Isch, Set([te]))
-  che = collect(Iterators.take(rc, 4))
+  hs = [h.components[:V].func for h in (loose
+          ? [homomorphism(I, I, inexact=inexact)]
+          : homomorphisms(I, I, inexact=inexact))]
+  minh = sort(hs, by=x->length(Set(x)))[1]
+  μ = Dict(zip(I[:id_V], I[:id_V][minh]))
+  res = appdict(μ, I)
+  println(map(sizes, [I, res]))
+  println("core dt = $(now()-strt)")
+  return res
 end

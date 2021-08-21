@@ -3,17 +3,14 @@ include("/Users/ksb/Catlab.jl/test/atp/WD.jl")
 
 using Test
 
-##########################################
-if 1+1==1
-    idxxid_sc = wd_to_cospan(idxxid, Σ_monoid)[2];
-    xx_hg     = wd_to_cospan(xx, Σ_monoid)[2];
-    rw1 = apply_eq(idxxid_sc, T_monoid, :leftid);
-    rw2 = apply_eq(rw1,       T_monoid, :rightid);
+if 1+1==0
+# idxxid = @program C (x::X) let y=e(); mul(mul(y, x), mul(x, y)) end
+# xx = @program C (x::X) mul(x, x) # final result
+# pr, res, m, r2 = prove(T_monoid, idxxid, xx; maxi=4)
 
-    @test !csp_homomorphic(xx_hg, idxxid_sc) # not yet
-    @test !csp_homomorphic(xx_hg, rw1) # not yet
-    @test csp_homomorphic(xx_hg, rw2) # prove after applying leftid AND rightid
 
-    proveresult = prove(T_monoid, idxxid, xx, oriented=true)
-    @test !(proveresult === nothing)
+xnyymx = trim(@program(C, (x::X,n::X,m::X),
+              let nx = mul(n,x); (nx,[mul(nx,m),x]) end), 1,1)
+s = [:e_intro, :sym, :mul_assoc, :cancel, :pos, :leftid]
+h, newres, r, r2 = prove(T_pcs_mon, xnyymx, passx; strat=seq([[ss] for ss in s]), maxi=length(s))
 end

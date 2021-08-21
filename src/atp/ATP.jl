@@ -16,36 +16,6 @@ WD = WiringDiagram#{Any,Any,Any,Any}
 WDPair = Pair{WiringDiagram{Any,Any,Any,Any},
         WiringDiagram{Any,Any,Any,Any}}
 include(joinpath(@__DIR__,"Chase.jl"))
-"""
-An equation for a partial theory. May or may not be reversible.
-"""
-function check_wd(wd::WiringDiagram, err::String)::Nothing
-  d = wd.diagram
-  # no pass through wires
-  nparts(d, :PassWire) == 0 || error(err*"$wd has a passthrough wire")
-  # Every external port has at least one external wire
-  # for (w, W, p) in [(:in_src,:InWire, :OuterInPort),
-  #           (:out_tgt, :OutWire, :OuterOutPort)]
-  #   nparts(d, W) == nparts(d, p) || error(err*"#$W != #$p\n$d")
-  #   e = err * "$w indices: $(d.indices[w]) - not all length 1"
-  #   all(x->!isempty(x), d.indices[w]) || error(e)
-  # end
-  # Every port has exactly one wire/extwire connected
-  # for (ew, w, p) in [(:in_tgt, :tgt, :InPort),
-  #           (:out_src, :src, :OutPort)]
-  #   ewind, wind = [d.indices[x] for x in [ew, w]]
-  #   ewlen, wlen = [map(length, x) for x in [ewind, wind]]
-
-  #   for port in 1:nparts(d, p)
-  #     e = err*"Port $port does not have any wirs"
-  #     sort([ewlen[port], wlen[port]]) == [0, 1] || error("$wd\n"*e)
-  #   end
-  # end
-  # TODO
-  # all junctions must have same type for all in/outports
-  # external port types must match internal ports they're connected to
-  return nothing
-end
 
 """
 Stick a junction in pass through wires
@@ -74,8 +44,8 @@ end
     end
     map(passthru_fix!, [l, r])
     map(add_junctions!, [l, r])
-    check_wd(l, "$n: Left\n")
-    check_wd(r, "$n: Left\n")
+    #check_wd(l, "$n: Left\n")
+    #check_wd(r, "$n: Left\n")
     return new(n,l,r,v)
   end
 end
@@ -83,6 +53,8 @@ Eq(n,l,r) = Eq(n,l,r,true)
 function Base.isless(x::Eq, y::Eq)::Bool
   return Base.isless(x.name, y.name)
 end
+flip(x::Eq)::Eq = x.rev ? Eq(Symbol("$(x.name)_rev"), x.r, x.l, x.rev) : error("Cannot flip $(x.name)")
+
 
 """
 """
@@ -273,11 +245,11 @@ function apply_eq(sc_cset::ACSet{CD}, T::EqTheory,
   # side of the rule is the "L" pattern in the DPO rewrite
   @assert rule.rev || forward "Cannot apply $(rule.name) in reverse direction"
   l, r = map(wd_pad, forward ? (rule.l, rule.r) : (rule.r, rule.l))
-  pat,_,Lmap = wd_to_cospan(l, T.gens)[2:4]
+  pat,_,Lmap = wd_to_cospan(l, T)[2:4]
 
   # l is either replaced with merging of l and r or, or just r
   r_, lrmap = repl ? (r, nothing) : branch(l, r)[1:2]
-  R_,ccR,Rmap = wd_to_cospan(r_, T.gens)[2:4]
+  R_,ccR,Rmap = wd_to_cospan(r_, T)[2:4]
 
   # Store interface data and then erase it from CSets
   vmap = Pair{Int,Int}[]
@@ -293,7 +265,7 @@ function apply_eq(sc_cset::ACSet{CD}, T::EqTheory,
   rem_IO!(R_)
 
   if repl
-    I = sigma_to_hyptype(T.gens)[4]()
+    I = hyptype(T)[4]()
     lnodes = [v[1] for v in vmapset]
     add_parts!(I, :V, length(vmapset), color=pat[:color][lnodes])
     L = ACSetTransformation(I, pat, V=lnodes)
@@ -445,10 +417,10 @@ Return homomorphism as witness, if any
 Takes in set of generators Σ, equations I, wiring diagram csets c1 and c2.
 If oriented, then rewrites are only applied in the forward direction.
 """
-function prove(T::EqTheory, c1::WD, c2::WD;
+function prove_(T::EqTheory, c1::WD, c2::WD;
          n::Int=3, oriented::Bool=false)::Pair{Bool, WD}
-  d1 = wd_to_cospan(c1, T.gens)[2]
-  d2 = wd_to_cospan(c2, T.gens)[2]
+  d1 = wd_to_cospan(c1, T)[2]
+  d2 = wd_to_cospan(c2, T)[2]
   h = homomorphism(d2, d1)
   if !(h===nothing)
     return h
@@ -478,9 +450,9 @@ hyperedge for each arity (distinguished by # and type of in/outputs).
 TODO: return a specific ACSet HΣ for the signature, where being homomorphic to
 HΣ means that a diagram satisfies the signature.
 """
-function sigma_to_hyptype(Σ::Set{Box{Symbol}})
+function hyptype(Σ::EqTheory)
   arities = Dict{Pair{Vector{Symbol}, Vector{Symbol}}, Set{Symbol}}()
-  for op in Σ
+  for op in Σ.gens
     ar = op.input_ports => op.output_ports
     if haskey(arities, ar)
       push!(arities[ar], op.value)
@@ -531,6 +503,11 @@ function sigma_to_hyptype(Σ::Set{Box{Symbol}})
   return acst{Symbol}, obtype{Symbol}, sctype{Symbol}, cspcset{Symbol}
 end
 
+function hypsyms(Σ::EqTheory, s::Symbol
+                 )::Tuple{Symbol, Symbol, Vector{Symbol}, Vector{Symbol}}
+    b = only([g for g in Σ.gens if s==g.value])
+    return hypsyms(b.input_ports, b.output_ports)
+end
 function hypsyms(i::Vector{Symbol}, j::Vector{Symbol}
         )::Tuple{Symbol, Symbol, Vector{Symbol}, Vector{Symbol}}
   str = x -> join(map(string,x),"_")
@@ -548,26 +525,41 @@ Add a empty node between each generator and the outerbox and a node between each
 generator. This should be an idempotent function. (todo: add tests for this)
 """
 function wd_pad(sd::WD)::WD
-  check_wd(sd, "$sd pad\n")
+  # check_wd(sd, "$sd pad\n")
   sd = deepcopy(sd)
   d = sd.diagram
   in_delete, out_delete, w_delete = Set{Int}(), Set{Int}(), Set{Int}()
-
+  for (ps,pt,_) in d.tables[:PassWire]
+    typ = d[:outer_in_port_type][ps]
+    new_b = add_part!(d, :Box, value=typ, box_type=Junction{Nothing, Symbol})
+    new_ip = add_part!(d, :InPort, in_port_box=new_b, in_port_type=typ)
+    new_op = add_part!(d, :OutPort, out_port_box=new_b, out_port_type=typ)
+    add_part!(d, :InWire, in_src=ps, in_tgt=new_ip, in_wire_value=nothing)
+    add_part!(d, :OutWire, out_src=new_op, out_tgt=pt, out_wire_value=nothing)
+  end
   for b in filter(x->!(d[:box_type][x]<:Junction), parts(d, :Box))
     for ip in incident(d, b, :in_port_box)
       typ = d[:in_port_type][ip]
       new_b = add_part!(d, :Box, value=typ, box_type=Junction{Nothing, Symbol})
       new_op = add_part!(d, :OutPort, out_port_box=new_b, out_port_type=typ)
+      in_tgts, in_srcs, srcs, tgts = Int[],Int[],Int[],Int[]
       for iw in incident(d, ip, :tgt)
         new_ip = add_part!(d, :InPort, in_port_box=new_b, in_port_type=typ)
-        add_part!(d, :Wire, src=d[:src][iw], tgt=new_ip, wire_value=nothing)
+        push!(srcs, d[:src][iw])
+        push!(tgts, new_ip)
         push!(w_delete, iw)
       end
       for iw in incident(d, ip, :in_tgt)
         new_ip = add_part!(d, :InPort, in_port_box=new_b, in_port_type=typ)
-        add_part!(d, :InWire, in_src=d[:in_src][iw], in_tgt=new_ip, wire_value=nothing)
+        push!(in_srcs, d[:in_src][iw])
+        push!(in_tgts, new_ip)
         push!(in_delete, iw)
       end
+      add_parts!(d, :Wire, length(srcs), src=srcs, tgt=tgts, wire_value=nothing)
+      for (is, it) in zip(in_srcs, in_tgts)
+        add_part!(d, :InWire, in_src=is, in_tgt=it, in_wire_value=nothing)
+      end
+      #add_parts!(d, :InWire, length(in_srcs), in_src=in_srcs, in_tgt=in_tgts, wire_value=nothing)
       add_part!(d, :Wire, src=new_op, tgt=ip, wire_value=nothing)
     end
 
@@ -575,16 +567,21 @@ function wd_pad(sd::WD)::WD
       typ = d[:out_port_type][op]
       new_b = add_part!(d, :Box, value=typ, box_type=Junction{Nothing, Symbol})
       new_ip = add_part!(d, :InPort, in_port_box=new_b,in_port_type=typ)
+      srcs, tgts, out_srcs, out_tgts = Int[],Int[],Int[],Int[]
       for ow in incident(d, op, :src)
         new_op = add_part!(d, :OutPort, out_port_box=new_b, out_port_type=typ)
-        add_part!(d, :Wire, tgt=d[:tgt][ow], src=new_op, wire_value=nothing)
+        push!(tgts, d[:tgt][ow])
+        push!(srcs, new_op)
         push!(w_delete, ow)
       end
       for ow in incident(d, op, :out_src)
         new_op = add_part!(d, :OutPort, out_port_box=new_b, out_port_type=typ)
-        add_part!(d, :OutWire, out_tgt=d[:out_tgt][ow], out_src=new_op, wire_value=nothing)
+        push!(out_tgts, d[:out_tgt][ow])
+        push!(out_srcs, new_op)
         push!(out_delete, ow)
       end
+      add_parts!(d, :Wire, length(tgts), tgt=tgts, src=srcs, wire_value=nothing)
+      add_parts!(d, :OutWire, length(out_tgts), out_tgt=out_tgts, out_src=out_srcs, out_wire_value=nothing)
       add_part!(d, :Wire, tgt=new_ip, src=op, wire_value=nothing)
     end
 
@@ -609,6 +606,7 @@ function wd_pad(sd::WD)::WD
   rem_parts!(d, :Wire, sort(collect(w_delete)))
   rem_parts!(d, :InWire, sort(collect(in_delete)))
   rem_parts!(d, :OutWire, sort(collect(out_delete)))
+  rem_parts!(d, :PassWire, parts(d, :PassWire))
   return sd
 end
 
@@ -628,11 +626,10 @@ All components connected by Frobenius generators are condensed together.
 
 TODO don't assume all outerinports have a unique inwire
 """
-function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
-           )# ::Tuple{StructuredCospan, ACSet}
+function wd_to_cospan(sd::WD, Σ::EqTheory)# ::Tuple{StructuredCospan, ACSet}
   sd = wd_pad(sd)
   d = sd.diagram
-  aptype, _, sctype, sccsettype = sigma_to_hyptype(Σ)
+  aptype, _, sctype, sccsettype = hyptype(Σ)
 
   # For each component in apex, keep track of which box each part comes from
   mapping = Dict([sym => Int[] for sym in ob(aptype.body.body.parameters[1])])
@@ -664,7 +661,6 @@ function wd_to_cospan(sd::WD, Σ::Set{Box{Symbol}}
   hs = i -> hypsyms(get_arity(sd, i)...)
 
   # Total # of connected components
-  println("conn_comps.ngroups ($(conn_comps.ngroups)) - (nparts(d, :Box) ($(nparts(d, :Box))) - length(nodes) ($(length(nodes))))")
   n = conn_comps.ngroups - (nparts(d, :Box) - length(nodes))  # N IS 1 TOO MANY
   nodetypes = Union{Nothing, Symbol}[nothing for _ in 1:n]
 
@@ -886,10 +882,10 @@ function to_schema(Σ::EqTheory)::Schema
 end
 
 """A cospan of hypergraph ACset is converted to a relational db instance"""
-function to_db_inst(Σ::EqTheory, csp::ACSet{CD,AD})::ACSet where {CD,AD}
+function to_db_inst(Σ::EqTheory, csp::ACSet{CD})::ACSet where {CD}
   csettype, _ = schema_to_csettype(to_schema(Σ))
   res = csettype()
-  add_parts!(res, :V, nparts(csp, :V), id_V=collect(parts(csp, :V)))
+  add_parts!(res, :V, nparts(csp, :V), id_V=collect(parts(csp, :V)), sort=csp[:color])
   for o in filter(x->x ∉ [:V, :_I, :_O], ob(CD))
     for (i, r_) in enumerate(csp.tables[o])
       r = collect(r_)
@@ -901,36 +897,81 @@ function to_db_inst(Σ::EqTheory, csp::ACSet{CD,AD})::ACSet where {CD,AD}
   return res
 end
 
-function to_dependency(Σ::EqTheory, csp::Eq)::TGD
-  L = wd_to_cospan(csp.l, Σ.gens)[2];
-  R = wd_to_cospan(csp.r, Σ.gens)[2];
+function from_db_inst(Σ::EqTheory, I::ACSet, ins::Vector{Int}=Int[],
+                      outs::Vector{Int}=Int[])::ACSet
+  res = hyptype(Σ)[4]()
+  add_parts!(res, :V, nparts(I, :V), color=I[:sort])
+  for g in [x.value for x in Σ.gens]
+    t, l, i, o = hypsyms(Σ, g)
+    io = vcat(i,o)
+    for r in I.tables[g]
+      d = Dict{Symbol, Any}(zip(io, r))
+      d[l] = g
+      add_part!(res, t; d...)
+    end
+  end
+  add_parts!(res, :_I, length(ins),  _i=[only(incident(I, i, :id_V)) for i in ins])
+  add_parts!(res, :_O, length(outs), _o=[only(incident(I, i, :id_V)) for i in outs])
+  return res
+end
+
+
+"""
+External wires in L are variables `x` that are shared between the body
+and the result. Internal nodes (not touched by an external wire) of L are
+variables that are not used in the result.
+
+External wires in R must be given the same ID as found in the corresponding L
+instance. Internal nodes in R must be given fresh IDs. If multiple external
+wires in R map to the same node, this is an equality constraint. (just pick one
+of the wire IDs to be the ID of this node)
+"""
+function to_dependency(Σ::EqTheory, csp::Eq)::Dep
+  L = wd_to_cospan(csp.l, Σ)[2];
+  R = wd_to_cospan(csp.r, Σ)[2];
   body = to_db_inst(Σ, L)
   res = to_db_inst(Σ, R)
-  μ = Dict([k => k + nparts(body, :V) for k in res[:id_V]])
-
-  ni = nparts(L, :_I)
-  j = IntDisjointSets(ni+nparts(L, :_O))
-  for (i, v) in enumerate(L[:_i])
-    μ[v] = i
-    union!(j, v, R[:_i][i])
+  μ = Dict([k => k + nparts(body, :V) for k in res[:id_V]]) # fresh IDs
+  groups = Dict{Int, Vector{Int}}([k=>Int[] for k in res[:id_V]])
+  for (i, (vl, vr)) in enumerate(collect(zip(
+      vcat(L[:_i], L[:_o]), vcat(R[:_i], R[:_o]))))
+    id_L, id_R = body[:id_V][vl], res[:id_V][vr]
+    μ[id_R]=id_L
+    push!(groups[vr], id_L)
   end
-  for (i, v) in enumerate(L[:_o])
-    μ[v] = i + ni
-    union!(j, v, R[:_i][i])
-  end
-  seen, eqs =  Set{Int}(), Set{Set{Int}}()
-  for i in 1:length(j)
-    new_eq = Set([i])
-    for k in filter(∉(seen), i+1:length(j))
-      if in_same_set(j, i, k)
-        push!(seen, k)
-        push!(new_eq, k)
-      end
-    end
-    if length(new_eq) > 1
-      push!(eqs, new_eq)
-    end
-  end
-  println("L $L\nR $R\nμ $μ eqs $eqs")
-  return TGD(body, appdict(μ,res), eqs)
+  # Set μ to map each connected component to its min element
+  eqs = Set([Set(vs) for vs in filter(x->length(x)>1, collect(values(groups)))])
+  return Dep(csp.name, body, appdict(μ,res), eqs)
 end
+
+
+
+"""
+Given two cospan of hypergraph ACSets, construct a termination condition
+"""
+function proven(Σ::EqTheory, start::ACSet, conclusion::ACSet)::Function
+  function f(I::ACSet,_,μ::Dict{Int,Int},_)::Bool
+    ins, outs = [appdict(μ,start[x]) for x in [:_i, :_o]]
+    println("ins $ins outs $outs μ $(sort(collect(μ))[1:min(5, end)])")
+    res = from_db_inst(Σ, I, ins, outs)
+    b = csp_homomorphic(conclusion, res)
+    println("homomorphism test $b")
+    return b
+  end
+  return f
+end
+
+function prove(Σ::EqTheory, start::Union{ACSet,WD}, goal::Union{ACSet,WD};
+               strat::Function=allseq, maxi::Int=3)
+  start = start isa ACSet ? start : wd_to_cospan(start, Σ)[2];
+  goal  = goal  isa ACSet ? goal  : wd_to_cospan(goal , Σ)[2];
+  I = to_db_inst(Σ, start)
+  eqs = vcat([to_dependency(Σ, e) for e in Σ.eqs],
+             [to_dependency(Σ, flip(e)) for e in Σ.eqs if e.rev])
+  pr = proven(Σ, start, goal)
+  (res, μ) =  core_chase(I, Set(eqs), strat, pr, maxi)
+  res2 = from_db_inst(Σ, res, appdict(μ, start[:_i]), appdict(μ, start[:_o]))
+  return pr(res, nothing, μ,  nothing), res, μ, res2
+end
+
+

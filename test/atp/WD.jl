@@ -59,7 +59,6 @@ function trim(p::WiringDiagram{BiproductCategory, Any, Any, Any}, O::Int=0,
   return p
 end
 
-tf = [true, false]
 # Single sorted inputs/outputs
 Zero, One, Two, Three, Four, Five, Six = [repeat([:X], i) for i in 0:6]
 
@@ -80,7 +79,7 @@ cmp  = Box(:cmp, [:A,:A], [:A]);
 o_o  = Box(:o_o, [:O,:O], [:O]); # ⊗ₒ
 o_a  = Box(:o_a, [:A,:A], [:A]); # ⊗ₐ
 
-ounit= Box(:⊤,  Symbol[], [:O])
+ounit= Box(:⊤, Symbol[], [:O])
 σ  = Box(:σ,  [:O, :O], [:A])
 del  = Box(:δ,  [:O],   [:A])
 eps  = Box(:ϵ,  [:O],   [:A])
@@ -151,11 +150,12 @@ passa = @program C (x::A) -> x
 
 epass =  trim(@program(C, (x::X,y::X), (x, [y,e()])), 1)
 
-ll = @program C (x::X, y::X) -> mul([e(), y], x)
-leftid = Eq(:rightid, ll, epass);
+e11 = @program C (x::X) (e(),x)
+ll = @program(C, (x::X), let y=e(); (y, mul(y, x)) end)
+leftid = Eq(:leftid, ll, e11, false);
 
-rr =  @program C (x::X, y::X) -> mul(x, [e(), y])
-rightid = Eq(:rightid, rr, epass);
+rr = @program(C, (x::X), let y=e(); (y, mul(x, y)) end)
+rightid = Eq(:rightid, rr, e11, false);
 
 ma1 = @program C (x::X,y::X,z::X) -> mul(x, mul(y, z))
 ma2 = @program C (x::X,y::X,z::X) -> mul(mul(x, y), z)
@@ -173,33 +173,25 @@ ma1 = @program C (x::A,y::A,z::A) -> o_a(x, o_a(y, z))
 ma2 = @program C (x::A,y::A,z::A) -> o_a(o_a(x, y), z)
 o_a_assoc = Eq(:o_a_assoc, ma1, ma2);
 
-idxxid = @program C (x::X) mul(mul(e(), x), mul(x, e()))
-xx = @program C (x::X) mul(x, x)
-
-e11 = @program C (_::X) e()
-rightinv = Eq(:rightinv, @program C (x::X)   mul(x, inv(x)),  e11);
-leftinv  = Eq(:leftinv,  @program(C, (x::X), mul(inv(x), x)), e11);
-
+e2x = trim(@program(C, (x::X), let y=e(); (y, y, x) end), 2)
+rightinv = Eq(:rightinv, @program(C, (x::X), (e(),mul(x, inv(x)))), e2x, false);
+leftinv  = Eq(:leftinv,  @program(C, (x::X), (e(),mul(inv(x),x))), e2x, false);
+if 1+1==2
 posl = trim(@program(C, (x::X,y::X), [mul(x,y), e()]))
-
 posr = trim(@program(C, (x::X,y::X), [x, e(), y]))
-cancell = trim(@program(C, (x::X,y::X), [mul(x,y), y]))
-cancelr = trim(@program(C, (x::X,y::X), [x, e()]))
-
 pos = Eq(:pos,  posl, posr, false)
+
+cancell = trim(@program(C, (x::X,y::X), (e(), [mul(x,y), y])), 1)
+cancelr = @program(C, (x::X,y::X), [x, e()])
 cancel = Eq(:cancel, cancell, cancelr, false)
+
 sym = Eq(:sym, @program(C, (x::X,y::X) -> mul(x,y)),
-         @program(C,(x::X,y::X) -> mul(y,x)))
+               @program(C, (x::X,y::X) -> mul(y,x)))
 
 uniq_inv_1 = trim(@program(C,(a::X,b::X,c::X),[mul(a, b),mul(b, c),e()]))
 uniq_inv_2 = trim(@program(C,(a::X,b::X,c::X),[a,c]))
 uniq_inv   = Eq(:uniq_inv,   uniq_inv_1,   uniq_inv_2);
 
-xnyymx = @program C (x::X,n::X,m::X) begin
-  nx = mul(n,x)
-  return (nx,[mul(nx,m),x])
-end
-trim(xnyymx, 1, 1)
 
 div_1 =  @program C (a::X,b::X,c::X) [mul(a,b),c]
 div_2 =  @program C (a::X,b::X,c::X) [mul(inv(a),c),b]
@@ -219,11 +211,8 @@ r_order_3 = Eq(:r_ord_3,  rrr, e_wd);
 
 
 srs = @program C () let x=r_(), y=s_(); mul(mul(y, x), inv(y)) end
-
 rinv = @program C () inv(r_())
-
 sr2 =  @program C () let x=mul(s_(), r_()); mul(x,x) end
-
 
 R_copy = @program C (i::X) let x=R(i); (x,x) end
 fig26 =  @program C (i::X) let x=g(f(i)); (x,x) end
@@ -242,14 +231,11 @@ cmp_2 = trim(@program(C,(ff::A,gg::A),begin
   end ))
 cmp_intro = Eq(:cmp, cmp_1, cmp_2, false);
 
-
-
 id_s = @program C (a::A) cmp(Id(s(a)),a)
 l_unit = Eq(:l_unit, id_s, passa);
 
 id_t = @program C (a::A) cmp(a,Id(t(a)))
 r_unit = Eq(:r_unit, id_t, passa);
-
 
 o_func_sl = @program C (a::A, b::A) s(o_a(a,b))
 o_func_sr = @program C (a::A, b::A) o_o(t(a),t(b))
@@ -330,15 +316,13 @@ cc3_2 = @program C (a::A) cmp(a, δ(t(a)))
 cc3   = Eq(:cc3, cc3_1, cc3_2);
 
 delmu_t = @program C (a::O) cmp(δ(a), μ(a))
+idbox = @program C (a::O) Id(a)
 bone  = Eq(:bone, delmu_t, idbox)
 
 proj1   = Eq(:mu_s, @program(C,(a::O),s(μ(a))), passo)
 proj2   = Eq(:mu_t, @program(C,(a::O),t(μ(a))), passo)
 
-idbox = @program C (a::O) Id(a)
-
 frobr = @program C (a::O) cmp(μ(a),δ(a))
-
 frobll = @program C (a::O) let x=Id(a); cmp(o_a(x,δ(a)),o_a(μ(a),x)) end
 frob1   = Eq(:frob_l, frobll, frobr)
 
@@ -380,6 +364,7 @@ lam_eqg = Eq(:lam_eqg, lam_eqg1,    lam_eqg2)
 
 # Equation sets
 I_monoid = Set([mul_assoc, leftid, rightid]);
+
 I_group  = Set([leftinv, rightinv]);
 I_d3h  = Set([s_order_2, r_order_3]);
 I_reflG  = Set([refls, reflt])
@@ -396,6 +381,7 @@ I_pcs_mon = Set([mul_assoc, leftid, pos,cancel,sym])
 
 # Theories
 T_monoid = EqTheory(Σ_monoid, I_monoid);
+
 T_pcs_mon = EqTheory(Σ_monoid, I_pcs_mon);
 T_group  = union(T_monoid, Σ_group,  I_group);
 T_d3h  = union(T_group,  Σ_dihedral, I_d3h);
@@ -408,3 +394,5 @@ T_crc  = union(T_smc,   Σ_crc, I_crc);
 T_dcr  = union(T_crc,   Σ_dcr, I_dcr);
 T_cc   = union(T_dcr,   Σ0,  I_cc)
 T_ccc  = union(T_cc,  Σ_ccc, I_ccc)
+end
+
