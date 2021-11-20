@@ -13,7 +13,8 @@ module FinCats
 export FinCat, FinCatGraph, Path, ob_generators, hom_generators, equations,
   is_discrete, is_free, graph, edges, src, tgt, presentation,
   FinFunctor, FinDomFunctor, is_functorial, collect_ob, collect_hom, force,
-  FinTransformation, components, is_natural, is_initial
+  FinTransformation, components, is_natural, is_initial, merge_comm_diagram,
+  split_comm_diagram
 
 using AutoHashEquals
 using Reexport
@@ -371,6 +372,109 @@ function is_initial(F::FinFunctor)::Bool
 
   # Check for each t ∈ T whether F/t is connected
   return all(connected_nonempty_slice, 1:nv(Gₜ))
+end
+
+
+"""
+Remove redundnant information in commutative diagrams, seen as FinFunctors from
+an index category (presented by free DAG) to a category of labels.
+
+In commutative diagrams, we interpret an object with no incoming arrows as
+universally quantified over (e.g. "∀ a ∈ A, ϕ(a)"). Multiple instances of such a
+variable can be merged together (these path equalities are 1-D, so we need not
+worry about equations such as "∀ a₁,a₂ ∈ A, ϕ(a₁, a₂)"). Any pairs of
+(StartVertex, Path) that are equal can be merged together. E.g.
+
+  f    g
+A ⟶ B ⟶ C
+
+  f    h
+A ⟶ B ⟶ D
+
+can be unified as:
+
+       C
+  f   ↗ g
+A ⟶ B
+      ↘ h
+       D
+"""
+function merge_comm_diagram(F::FinFunctor)::FinFunctor
+  G = dom(F).graph
+  p = enumerate_paths(G)
+  roots = filter(v->isempty(incident(G,v,:tgt)), vertices(G))
+  seen = Dict{Pair{Int,Vector{Int}}, Int}()
+  seen2 = Dict{Pair{Int,Int}, Int}()
+  new_src, omap, hmap = Graph(), Int[], Int[]
+  for root in roots
+    root_type = ob_map(F, root)
+    pths = sort(collect(union(vcat([p[root=>v] for v in vertices(G)]...)...)),
+                by=length)
+
+    # Handle empty path case
+    if !haskey(seen, root_type => [])
+      seen[root_type => []] = add_vertex!(new_src)
+      push!(omap, root_type)
+    end
+
+    for pth in pths[2:end] # skip empty path when iterating here
+      pth_type = vcat(edges.(hom_map(F, pth))...) # sequence of morphisms
+      key = root_type => pth_type
+      if !haskey(seen, key) # this start ob + sequence has not yet been seen
+        # If we've added this NODE already and reaching it via different path,
+        # then we DON'T want to add a new object; check for this using `seen2`.
+        v_tgt = G[pth[end], :tgt]
+        key2 = root => v_tgt
+        if !haskey(seen2, key2) # haven't yet seen this start + end vertex combo
+          seen2[key2] = seen[key] = add_vertex!(new_src)
+          push!(omap, ob_map(F, v_tgt))
+        else
+          seen[key] = seen2[key2] # path equality forces this value
+        end
+        penult_v = seen[root_type => pth_type[1:end-1]]
+        push!(hmap, add_edge!(new_src, penult_v, seen[key]))
+      end
+    end
+  end
+  return FinFunctor(omap, hmap, FinCat(new_src), codom(F))
+end
+
+"""
+Split up equalities from an acyclic commutative diagram.
+
+Two levels of granularity:
+ - partition by start/end node
+ - further refine into all pairwise equalities
+
+This would ignore any edges that aren't part of a commutative pair of paths.
+These could be detected and treated specially if needed.
+"""
+function split_comm_diagram(F::FinFunctor; pair::Bool=false)::Set{FinFunctor}
+  G, res = dom(F).graph, Set{FinFunctor}()
+  for p in filter(x->length(x) > 1, collect.(map(y->filter(x->!isempty(x),y),
+                  values(enumerate_paths(G)))))
+    eqs = pair ? zip(p, p[2:end]) : [p]
+    for eq in collect.(eqs)
+      omap, hmap = ob_map(F, [G[eq[1][1], :src], G[eq[1][end], :tgt]]), Int[]
+      new_src = Graph(2)
+      for pth in eq
+        curr = 1
+        for (i, edge) in enumerate(pth)
+          if i == length(pth)
+            tgt = 2
+          else
+            tgt = add_vertex!(new_src)
+            push!(omap, ob_map(F, G[edge, :tgt]))
+          end
+          add_edge!(new_src, curr, tgt)
+          push!(hmap, edges(F.hom_map[edge])[1])
+          curr = tgt
+        end
+      end
+      push!(res, FinFunctor(omap, hmap, FinCat(new_src), codom(F)))
+    end
+  end
+  return res
 end
 
 # Mapping-based functors

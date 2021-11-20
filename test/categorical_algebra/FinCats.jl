@@ -234,4 +234,46 @@ F5 = FinFunctor([1,2,3], [1,2,3], T, T2)
 @test !is_initial(F4)
 @test !is_initial(F5)
 
+# Commutative diagrams
+######################
+
+
+# Disjoint union of DAGS interpreted as commutative diagrams
+# Two commutative triangles that share an edge
+G = @acset Graph begin
+  V=6 # A,B,C,A,B,D
+  E=6 #f g fg f h fh
+  src=[1,2,1, 4,5,4]
+  tgt=[2,3,3, 5,6,6]
+end
+G_ = FinCat(G)
+
+# Graph of types (this can be cyclic)
+# In reality, this must be a REFLEXIVE Graph so that we can identify morphisms
+# as identity morphisms.
+Ty = FinCat(@acset Graph begin
+  V=4 # A,B,C,D
+  E=5 #f g h fg fh
+  src=[1,2,2, 1,1]
+  tgt=[2,3,4, 3,4]
+end )
+
+# Type the vertices and edges by mapping into Ty
+F = FinFunctor([1,2,3,1,2,4],[1,2,4,1,3,5],G_,Ty)
+id_ty = FinFunctor(1:4,1:5,Ty,Ty)
+@test is_functorial(F)
+
+qF = merge_comm_diagram(F)
+
+# If we had id(::FinCat)::FinFunctor
+# and had to_graph(::FinFunctor)::LabeledGraph{Int,Int}
+# then we could confirm the isomorphism of the functors via:
+# is_isomorphic(to_graph(qF), to_graph(id(Ty)))
+@test is_isomorphic(dom(qF).graph, Ty.graph)
+
+F1, F2 = split_comm_diagram(id_ty) # combine the two results to get original G
+@test is_isomorphic(apex(coproduct(dom(F1).graph, dom(F2).graph)), G)
+
+
+
 end
