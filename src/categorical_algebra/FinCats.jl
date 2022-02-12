@@ -379,7 +379,7 @@ function FinDomFunctor(ob_map::Union{AbstractVector,AbstractDict},
 end
 FinDomFunctor(ob_map::Union{AbstractVector{Ob},AbstractDict{<:Any,Ob}},
               hom_map::Union{AbstractVector{Hom},AbstractDict{<:Any,Hom}},
-              dom::FinCat) where {Ob,Hom} =
+              dom::D) where {Ob,Hom,D<:FinCat} =
   FinDomFunctor(ob_map, hom_map, dom, TypeCat(Ob, Hom))
 
 functor_key(C::FinCat, x) = x
