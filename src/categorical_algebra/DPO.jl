@@ -285,4 +285,4 @@ function sesqui_pushout_rewrite(
   return codom(m__)
 end
 
-end
+end # module

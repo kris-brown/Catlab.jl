@@ -85,3 +85,26 @@ fig3 = Diagram(FinDomFunctor([i,i,i,s1,s2,c1,c2], hi.([s1,s2,s1,s2,c1,c2]),
                FinCatGraph(g3)))
 m = DiagramHom{id}([1],[], q2_L, fig3);
 r = DiagramHom{id}([1],[], q2_L, q2_R);
+
+
+
+@present ThPN(FreeSchema) begin
+  (S,I,O,T)::Ob
+  is::Hom(I,S)
+  it::Hom(I,T)
+  os::Hom(O,S)
+  ot::Hom(O,T)
+end
+@acset_type Petri(ThPN)
+
+G = apex(terminal(Petri))
+I = deepcopy(G)
+add_part!(I, :S); rem_part!(I, :I, 1)
+l = homomorphism(I,G); m = id(G); r = id(I)
+
+
+resDPO = rewrite_match(l,r, m) # DPO
+resSqPO= sesqui_pushout_rewrite(r, l, m)
+resSPO = single_pushout_rewrite(r,l,m)
+G1, G2 = Graph.([1,2])
+rewrite(homomorphism(G2,G1), id(G2), G1)
