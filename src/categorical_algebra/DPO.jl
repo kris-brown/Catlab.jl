@@ -2,7 +2,8 @@ module DPO
 export rewrite, rewrite_match, pushout_complement, can_pushout_complement,
   id_condition, dangling_condition, sesqui_pushout_rewrite_data,
   sesqui_pushout_rewrite, final_pullback_complement,
-  partial_map_classifier_universal_property, partial_map_classifier_eta
+  partial_map_classifier_universal_property, partial_map_classifier_eta,
+  partial_map_functor_hom, partial_map_functor_ob
 
 using ...Theories
 using ..FinSets, ..CSets, ..FreeDiagrams, ..Limits
@@ -210,7 +211,7 @@ function partial_map_classifier_universal_property(
     )::CSetTransformation where {S}
   hdata = collect(zip(hom(S),dom(S),codom(S)))
 
-  A, B = codom(m), codom(f)
+  A, B = dom(f), codom(f)
   ηB = partial_map_classifier_eta(B)
   TB = codom(ηB)
   res = Dict{Symbol, Vector{Int}}()
@@ -219,8 +220,10 @@ function partial_map_classifier_universal_property(
     homs_cds = [(h,cd) for (h,d,cd) in hdata if d==o]
     codom_data = isempty(homs_cds) ? [] : collect.(
       zip([TB[h] for h in first.(homs_cds)]...))
+    println("ob $o: homs_cds $homs_cds codom_data $codom_data")
 
     for i in parts(A, o)
+      println("part $i")
       xa=findfirst(==(i), collect(m[o]))
       if !isnothing(xa)
         push!(res[o], f[o](xa))
@@ -233,6 +236,7 @@ function partial_map_classifier_universal_property(
         # Get the outgoing morphism data for this deleted element
         outdata = [isnothing(v) ? nparts(B, cd)+1 : v
                   for ((_,cd),v) in zip(homs_cds, args)]
+        println("args $args outdata $outdata")
         # Identify which element of T(o) to send it to based on the out-data.
         for (j, outdata_) in reverse(collect(enumerate(codom_data)))
           if outdata_ == outdata
@@ -243,21 +247,30 @@ function partial_map_classifier_universal_property(
       end
     end
   end
-  return CSetTransformation(A, TB; res...)
+  ϕ = CSetTransformation(A, TB; res...)
+  A_ = apex(pullback(ϕ, ηB))
+  @assert is_isomorphic(apex(pullback(ϕ, ηB)), A)
+  return ϕ
 end
 
 """
 See Theorem 2 of 'Concurrency Theorems for Non-linear Rewriting Theories'
+
+
 """
 function final_pullback_complement(fm::ComposablePair)::ComposablePair
   f, m = fm
   A, B = dom(f), codom(f)
   m_bar = partial_map_classifier_universal_property(m, id(B))
   T_f = partial_map_functor_hom(f)
+  println("T_f $T_f")
   pb_2 = pullback(T_f, m_bar)
   _, g = pb_2.cone
   s = Span(partial_map_classifier_eta(A), compose(f,m))
   n = universal(pb_2, s)
+  A_ = apex(pullback(f,g))
+  println("A $A\nA_ $A_")
+  @assert is_isomorphic(apex(pullback(f,g)), A)
   return ComposablePair(n, g)
 end
 
@@ -266,8 +279,8 @@ Sesqui-pushout is just like DPO, except we use a final pullback complement
 instead of a pushout complement.
 """
 function sesqui_pushout_rewrite_data(
-    o::CSetTransformation,
     i::CSetTransformation,
+    o::CSetTransformation,
     m::CSetTransformation
     )::Tuple{CSetTransformation,CSetTransformation,
              CSetTransformation,CSetTransformation}
@@ -279,9 +292,9 @@ end
 
 """Just get the result of the SqPO transformation"""
 function sesqui_pushout_rewrite(
-    o::CSetTransformation, i::CSetTransformation, m::CSetTransformation
+    i::CSetTransformation, o::CSetTransformation, m::CSetTransformation
     )::StructCSet
-  m__, _, _, _ = sesqui_pushout_rewrite_data(o,i,m)
+  m__, _, _, _ = sesqui_pushout_rewrite_data(i,o,m)
   return codom(m__)
 end
 

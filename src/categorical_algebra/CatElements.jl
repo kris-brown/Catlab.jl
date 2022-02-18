@@ -51,6 +51,19 @@ function elements(X::StructACSet{S}) where S
   return Y
 end
 
+"""
+Apply category of elements to a morphism.
+This takes advantage of implementation details of elements of an object
+"""
+function elements(f::ACSetTransformation{S}) where S
+  X, Y = elements.([dom(f), codom(f)])
+  offs = [let z=findfirst(==(i), Y[:πₑ]); isnothing(z) ? 0 : z-1 end
+          for i in 1:length(ob(S))]
+  pts = vcat([collect(f[o]).+off for (o, off) in zip(ob(S), offs)]...)
+  hs = homomorphisms(X, Y; initial=Dict([:El=>pts]))
+  return only(hs)
+end
+
 """    presentation(X::AbstractElements)
 
 convert a category of elements into a new schema. This is useful for generating large schemas

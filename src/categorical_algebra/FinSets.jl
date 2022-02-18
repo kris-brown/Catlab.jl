@@ -4,7 +4,7 @@ module FinSets
 export FinSet, FinFunction, FinDomFunction, TabularSet, TabularLimit,
   force, is_indexed, preimage,
   JoinAlgorithm, SmartJoin, NestedLoopJoin, SortMergeJoin, HashJoin,
-  SubFinSet, SubOpBoolean
+  SubFinSet, SubOpBoolean, is_injective, is_surjective
 
 using AutoHashEquals
 using DataStructures: OrderedDict, IntDisjointSets, union!, find_root!
@@ -55,6 +55,8 @@ Base.length(set::FinSetInt) = set.n
 Base.in(set::FinSetInt, elem) = in(elem, 1:set.n)
 
 Base.show(io::IO, set::FinSetInt) = print(io, "FinSet($(set.n))")
+
+
 
 """ Finite set given by Julia collection.
 
@@ -191,6 +193,10 @@ FinFunction(f::AbstractVector{Int}; kw...) =
 
 Sets.show_type_constructor(io::IO, ::Type{<:FinFunction}) =
   print(io, "FinFunction")
+
+# These could be made to fail early if ever used in performance-critical areas
+is_surjective(f::FinFunction) = length(codom(f)) == length(Set(collect(f)))
+is_injective(f::FinFunction)  = length(dom(f)) == length(Set(collect(f)))
 
 """ Function out of a finite set.
 

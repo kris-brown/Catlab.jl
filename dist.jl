@@ -1,10 +1,12 @@
+using Revise
 using Catlab.CategoricalAlgebra
 using Catlab.Graphs
 using Catlab.Present
 using Catlab.Theories
+using Test
 
 using Catlab.CategoricalAlgebra.FinCats: FinCatGraphEq
-
+include("test.jl")
 """
 Based on "Categorical Foundations of Distributed Graph Transformation"
 
@@ -105,6 +107,116 @@ l = homomorphism(I,G); m = id(G); r = id(I)
 
 resDPO = rewrite_match(l,r, m) # DPO
 resSqPO= sesqui_pushout_rewrite(r, l, m)
-resSPO = single_pushout_rewrite(r,l,m)
+# resSPO = single_pushout_rewrite(l,r,m)
 G1, G2 = Graph.([1,2])
 rewrite(homomorphism(G2,G1), id(G2), G1)
+
+
+# test dangling #
+#################
+
+# HElpers
+dh = x->dom(hom(x))
+cs = x -> [k=>collect(v) for (k,v) in pairs(hom(x).components)]
+∂(A) = A ∧ ~A
+exp(A) = ~(¬A)
+updown(f) = X -> f(inv(f,X))
+
+
+# correct things that violate are:
+function d_viol(f,g)
+  A = g(f(dom(f)))
+  B = g(dom(g))
+  println("A = $(cs(A))")
+  println("B = $(cs(B))")
+  println("B-A $(cs(B\A))")
+  println("∂(A) $(cs(∂(A)))")
+  println("∂(B-A) $(cs(∂(B\A)))")
+  println("exp(B-A) $(cs(exp(B\A)))")
+  println("exp(A) $(cs(exp(A)))")
+  println("∂(A) ⟹ ∂(B-A) $(cs(∂(A) ⟹ ∂(B\A)))")
+  return (∂(A) ⟹ ∂(B\A)) \ B
+end
+
+viol1(f,g) = let A = g(f(dom(f))),B = g(dom(g));  cs(updown(g)(exp(B \ A)) \ B) end
+viol2(f,g) = let A = g(f(dom(f))),B = g(dom(g));  cs((exp(B)\exp(A)) \ B) end
+viol3(f,g) = let A = g(f(dom(f))),B = g(dom(g));  cs(updown(g)(∂(A) ⟹ ∂(B\A)) \ B) end
+
+# Graphs
+V4 = Graph(4)
+E2 = Graph(4);
+add_edges!(E2,[1,3],[2,4]);
+E1 = path_graph(Graph, 2);
+f = ACSetTransformation(V4, E2, V=[1,2,3,4]);
+g = homomorphism(E2,E1);
+@test cs(d_viol(f,g)) == [:V=>[],:E=>[]]
+
+A = @acset Graph begin V=1; E=1; src=[1]; tgt=[1] end
+B = @acset Graph begin V=2; E=2; src=[1,2]; tgt=[1,1] end
+C = @acset Graph begin V=2; E=3; src=[1,2,2]; tgt=[1,1,1] end
+f = homomorphism(A,B); g = homomorphism(B,C;monic=true)
+@test !can_pushout_complement(f,g)
+@test cs(d_viol(f,g)) == [:V=>[1,2], :E=>[3]]
+
+C = @acset Graph begin V=3; E=3; src=[1,2,3]; tgt=[1,1,1] end
+f = homomorphism(A,B); g = homomorphism(B,C;monic=true)
+@test can_pushout_complement(f,g)
+@test cs(d_viol(f,g)) == [:V=>Int[], :E=>Int[]]
+
+
+@present ThMon(FreeSchema) begin
+  (X)::Ob
+  m::Hom(X,X)
+end
+@acset_type Mon(ThMon)
+
+# SCENARIO 1
+A = @acset Mon begin X = 1; m= [1];  end;
+B = @acset Mon begin X = 2; m = [1,1];  end;
+C = @acset Mon begin X = 3; m=[1,1,1]; end;
+f = homomorphism(A,B); g = homomorphism(B,C;monic=true);
+@test cs(d_viol(f,g)) == [:X=>Int[]] # + _ +
+
+viol1(f,g)
+viol2(f,g)
+viol3(f,g)
+
+# Scneario 2
+C = @acset Mon begin X = 3; m=[1,1,2]; end;
+g = homomorphism(B,C;monic=true);
+@test cs(d_viol(f,g)) == [:X=>[1,2,3]]
+
+
+viol1(f,g)
+viol2(f,g)
+viol3(f,g)
+
+
+@present ThMonn(FreeSchema) begin
+  (X)::Ob
+  m::Hom(X,X)
+  n::Hom(X,X)
+end
+@acset_type Monn(ThMonn)
+# Scenario 3
+A = @acset Monn begin X = 1; m= [1]; n=[1] end;
+B = @acset Monn begin X = 2; m = [1,1]; n=[1,1] end;
+C = @acset Monn begin X = 3; m=[1,1,2]; n=[1,1,1] end;
+f = homomorphism(A,B); g = homomorphism(B,C;monic=true);
+@test cs(d_viol(f,g)) == [:X=>[1,2,3]]
+
+viol1(f,g)
+viol2(f,g)
+viol3(f,g)
+
+
+"""
+D_VIOL is wrong.
+
+We don't know whether something ends up in boundary of B-A because it's
+connected to a B or to an A (some of A is still in B-A b/c of functionality)
+
+Do we subtract boundary of A? This is also wrong because a violation could
+be connected both to B of B-A and to A of B-A.
+"""
+
