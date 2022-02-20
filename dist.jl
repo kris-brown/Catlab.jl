@@ -4,6 +4,7 @@ using Catlab.Graphs
 using Catlab.Present
 using Catlab.Theories
 using Test
+using DataStructures
 
 using Catlab.CategoricalAlgebra.FinCats: FinCatGraphEq
 include("test.jl")
@@ -100,17 +101,40 @@ end
 @acset_type Petri(ThPN)
 
 G = apex(terminal(Petri))
-I = deepcopy(G)
-add_part!(I, :S); rem_part!(I, :I, 1)
-l = homomorphism(I,G); m = id(G); r = id(I)
+L = Petri(); add_part!(L, :S)
+I = Petri(); add_parts!(I, :S, 2)
+l = only(homomorphisms(I,L)); m = only(homomorphisms(L, G)); r = id(I)
 
 
 resDPO = rewrite_match(l,r, m) # DPO
-resSqPO= sesqui_pushout_rewrite(r, l, m)
+resSqPO= sesqui_pushout_rewrite(l, r, m)
 # resSPO = single_pushout_rewrite(l,r,m)
 G1, G2 = Graph.([1,2])
 rewrite(homomorphism(G2,G1), id(G2), G1)
 
+
+@present ThSemisimplicialSet(FreeSchema) begin
+  (V,E,T) :: Ob
+  (d1,d2,d3)::Hom(T,E)
+  (src,tgt) :: Hom(E,V)
+  compose(d1, src) == compose(d2, src)
+  compose(d1, tgt) == compose(d3, tgt)
+  compose(d2, tgt) == compose(d3, src)
+end
+@acset_type SSet(ThSemisimplicialSet)
+tri = @acset SSet begin
+  T=1;E=3;V=3;src=[1,1,2];tgt=[3,2,3];d1=[1];d2=[2];d3=[3] end
+v1 = @acset SSet begin V=1 end
+v2 = @acset SSet begin V=2 end
+L = homomorphism(v2,v1); R=id(v2); m = CSetTransformation(v1, tri, V=[1]);
+A, B = v1, tri;
+getS(::StructACSet{S}) where S = S
+S = getS(tri)
+topo_obs(S)
+f = id(v1)
+
+#partial_map_classifier_universal_property(m, id(v1));
+resSqPO= sesqui_pushout_rewrite(L, R, m; pres=ThSemisimplicialSet)
 
 # test dangling #
 #################
