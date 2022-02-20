@@ -74,6 +74,8 @@ The specification for the following functions comes from:
      - for final pullback complement and sesqui-pushout rewriting
   - 'AGREE - Algebraic Graph Rewriting with Controlled Embedding'
      - for partial map classifier (a functor T and natural transformation η)
+
+ Cockett and Lack 2003 discuss partial map classifiers of copresheaves, so there may be something interesting there.
 """
 
 """
@@ -103,14 +105,18 @@ In general, T(X) ≅ |X| + ∏ₕ(|codom(h)|+1) for each outgoing morphism h::X�
 - the |X| corresponds to the 'real' elements of X
 - the second term corresponds to the possible ways an X can be deleted.
 """
-function partial_map_functor_ob(x::StructCSet{S})::StructCSet where {S}
+function partial_map_functor_ob(x::StructCSet{S}
+    )::Pair{StructCSet, Dict{Symbol,Dict{Vector{Int},Int}}} where {S}
   res = deepcopy(x)
+  d = DefaultDict{Symbol,Dict{Vector{Int},Int}}(()->Dict{Vector{Int},Int}())
   hdata = collect(zip(hom(S), dom(S), codom(S)))
   extra_data = Dict{Symbol, Vector{Dict{Symbol, Int}}}()
   for o in ob(S)
     extra_data[o] = Dict{Symbol, Int}[]
     homs_cds = [(h,cd) for (h,d,cd) in hdata if d==o] # outgoing morphism data
-    if !isempty(homs_cds)
+    if isempty(homs_cds)
+      d[o][Int[]] = nparts(x, o) + 1
+    else
       homs, cds = collect.(zip(homs_cds...))
       combdata = collect(Iterators.product([1:nparts(x,cd)+1 for cd in cds]...))
       # We don't use the last element of this iterator (|X₁|+1,|X₂|+1,...)
@@ -119,17 +125,19 @@ function partial_map_functor_ob(x::StructCSet{S})::StructCSet where {S}
       for c in combdata[1:end-1]
         push!(extra_data[o], Dict{Symbol, Int}(zip(homs,c)))
       end
+      d[o][collect(combdata[end])] = nparts(x, o) + 1
     end
   end
   # Add the extra element to each set
   copy_parts!(res, apex(terminal(typeof(x))))
+
   # Add the computed combination data
-  for (k, vs) in extra_data
+  for (o, vs) in extra_data
     for v in vs
-      add_part!(res, k; v...)
+      d[o][collect(values(v))] = add_part!(res, o; v...)
     end
   end
-  return res
+  return res => d
 end
 
 """
@@ -144,8 +152,8 @@ in T(Y).
 function partial_map_functor_hom(f::CSetTransformation{S}
     )::CSetTransformation where S
   X, Y = dom(f), codom(f)
-  d, cd = partial_map_functor_ob.([X,Y])
-  comps, mapping = [Dict{Symbol,Vector{Int}}() for _ in 1:2]
+  (d, _), (cd, cddict) = partial_map_functor_ob.([X,Y])
+  comps, mapping = Dict{Symbol,Vector{Int}}(), Dict()
   hdata = collect(zip(hom(S),dom(S),codom(S)))
 
   for (k,v) in pairs(f.components)
@@ -153,26 +161,12 @@ function partial_map_functor_hom(f::CSetTransformation{S}
   end
 
   for o in ob(S)
-    comps[o] = Int[]
-    homs_cds = [(h,cd) for (h,d,cd) in hdata if d==o]
-    if !isempty(homs_cds)
-      codom_data = collect.(zip([cd[h] for h in first.(homs_cds)]...))
-    end
-    for i in parts(d, o)
-      if i <= length(mapping[o])
-        push!(comps[o], mapping[o][i]) # use f for elements that are defined
-      else
-        # find what the extra element in T(Y) maps to (its outgoing morphisms)
-        outdata = [mapping[cd][d[h][i]] for (h,cd) in (homs_cds)]
-        # Find the element in T(Y) by iterating through its elements
-        # Search in reverse order so that we hit the added-on element first, in
-        # case there happens to be a 'real' element in Y that has the same data
-        for (j, outdata_) in reverse(collect(enumerate(codom_data)))
-          if outdata_ == outdata
-            push!(comps[o], j)
-            break
-          end
-        end
+    comps[o] = map(parts(d, o)) do i
+      if i <= nparts(X,o) # use f for elements that are defined
+        return f[o](i)
+      else  # find which extra elem ∈ T(Y) it maps to (by its outgoing maps)
+        outdata = Int[mapping[cd][d[i, h]] for (h,c_,cd) in hdata if c_==o]
+        return cddict[o][outdata]
       end
     end
   end
@@ -184,7 +178,7 @@ The natural injection from X ⟶ T(X)
 """
 function partial_map_classifier_eta(x::StructCSet{S}
     )::CSetTransformation where {S}
-  codom = partial_map_functor_ob(x)
+  codom = partial_map_functor_ob(x)[1]
   d = Dict([k=>collect(v) for (k,v) in pairs(id(x).components)])
   return CSetTransformation(x, codom; d...)
 end
@@ -209,53 +203,47 @@ element of the additional data added by T(B).
 function partial_map_classifier_universal_property(
     m::CSetTransformation{S}, f::CSetTransformation{S}
     )::CSetTransformation where {S}
-  hdata = collect(zip(hom(S),dom(S),codom(S)))
-
-  A, B = dom(f), codom(f)
-  ηB = partial_map_classifier_eta(B)
-  TB = codom(ηB)
-  res = Dict{Symbol, Vector{Int}}()
+  hdata   = collect(zip(hom(S),dom(S),codom(S)))
+  A, B    = codom(m), codom(f)
+  ηB      = partial_map_classifier_eta(B)
+  Bdict   = partial_map_functor_ob(B)[2]
+  TB      = codom(ηB)
+  fdata   = DefaultDict{Symbol, Dict{Int,Int}}(()->Dict{Int,Int}())
+  res     = Dict{Symbol, Vector{Int}}()
+  unknown = Dict{Symbol, Int}()
+  # Get mapping of the known values
+  for (o, fcomp) in pairs(components(f))
+    unknown[o] = nparts(B, o) + 1
+    for (aval, fval) in zip(collect(m[o]), collect(fcomp))
+      fdata[o][aval] = fval
+    end
+  end
+  # Compute components of phi
   for o in ob(S)
-    res[o] = Int[]
-    homs_cds = [(h,cd) for (h,d,cd) in hdata if d==o]
-    codom_data = isempty(homs_cds) ? [] : collect.(
-      zip([TB[h] for h in first.(homs_cds)]...))
-    println("ob $o: homs_cds $homs_cds codom_data $codom_data")
-
-    for i in parts(A, o)
-      println("part $i")
-      xa=findfirst(==(i), collect(m[o]))
-      if !isnothing(xa)
-        push!(res[o], f[o](xa))
-      elseif isempty(codom_data)
-        # There is no outgoing morphism data to match up, so send to the +1 elem
-        push!(res[o], nparts(B, o)+1)
-      else
-        # find which args of this element have been deleted
-        args = [findfirst(==(A[h][i]), collect(m[cd])) for (h,cd) in homs_cds]
-        # Get the outgoing morphism data for this deleted element
-        outdata = [isnothing(v) ? nparts(B, cd)+1 : v
-                  for ((_,cd),v) in zip(homs_cds, args)]
-        println("args $args outdata $outdata")
-        # Identify which element of T(o) to send it to based on the out-data.
-        for (j, outdata_) in reverse(collect(enumerate(codom_data)))
-          if outdata_ == outdata
-            push!(res[o], j)
-            break
-          end
-        end
+    res[o] = map(parts(A, o)) do i
+      if haskey(fdata[o], i)
+        return fdata[o][i]
+      else # What kind of unknown value is it?
+        homdata = [get(fdata[cd], A[i, h], unknown[cd])
+                   for (h,d,cd) in hdata if d == o]
+        return Bdict[o][homdata]
       end
     end
   end
   ϕ = CSetTransformation(A, TB; res...)
-  A_ = apex(pullback(ϕ, ηB))
-  @assert is_isomorphic(apex(pullback(ϕ, ηB)), A)
+  @assert is_natural(ηB)
+  @assert is_natural(ϕ)
+  @assert is_isomorphic(apex(pullback(ηB,ϕ)), dom(m))
   return ϕ
 end
 
 """
 See Theorem 2 of 'Concurrency Theorems for Non-linear Rewriting Theories'
-
+      f
+  B <--- A
+m ↓      ↓ n
+  C <--  D
+     g
 
 """
 function final_pullback_complement(fm::ComposablePair)::ComposablePair
@@ -263,14 +251,11 @@ function final_pullback_complement(fm::ComposablePair)::ComposablePair
   A, B = dom(f), codom(f)
   m_bar = partial_map_classifier_universal_property(m, id(B))
   T_f = partial_map_functor_hom(f)
-  println("T_f $T_f")
   pb_2 = pullback(T_f, m_bar)
   _, g = pb_2.cone
   s = Span(partial_map_classifier_eta(A), compose(f,m))
   n = universal(pb_2, s)
-  A_ = apex(pullback(f,g))
-  println("A $A\nA_ $A_")
-  @assert is_isomorphic(apex(pullback(f,g)), A)
+  @assert is_isomorphic(apex(pullback(m,g)), A)
   return ComposablePair(n, g)
 end
 

@@ -316,15 +316,9 @@ m = CSetTransformation(X,A,V=[4,1],E=[1])
 f = CSetTransformation(X,B,V=[1,1],E=[1])
 phi = partial_map_classifier_universal_property(m,f)
 
-# check pullback property
-m_, f_ = pullback(phi, partial_map_classifier_eta(B)).cone
+# check pullback property: todo - implement isomorphisms of diagrams so that
+# limits/colimits can be checked to be isomorphic
 
-# This is isomorphic, but it's a particular implementation detail which
-# isomorphism is produced. At the time of writing this test, it turns out we get
-# an identical span if we reverse the arrow of the apex X
-iso = CSetTransformation(X,X;V=[2,1], E=[1])
-@test force(compose(iso, m_)) == m
-@test force(compose(iso, f_)) == f
 
 # Another test
 #------------
@@ -362,7 +356,7 @@ m = CSetTransformation(L,G;V=[1])
 l = CSetTransformation(I,L;V=[1,1])
 r = id(I)
 
-rw = sesqui_pushout_rewrite(r,l,m)
+rw = sesqui_pushout_rewrite(l,r,m)
 @test is_isomorphic(rw, @acset Graph begin
   V=4;E=4;src=[1,1,2,2];tgt=[3,4,3,4] end)
 
@@ -374,7 +368,7 @@ L, I, R = path_graph(Graph, 2), Graph(2), Graph(2)
 G = @acset Graph begin V=3;E=3;src=[1,1,1];tgt=[2,2,3] end
 l, r = CSetTransformation(I, L; V=[1,2]), id(I)
 m = CSetTransformation(L,G;V=[1,2],E=[1])
-rw = sesqui_pushout_rewrite(r,l,m)
+rw = sesqui_pushout_rewrite(l,r,m)
 @test is_isomorphic(rw, @acset Graph begin
   V=3;E=2;src=[1,1];tgt=[2,3] end)
 
@@ -384,8 +378,8 @@ G= @acset Graph begin V=4;E=3;src=[1,3,3];tgt=[2,2,4] end
 L,I,R = Graph.([1,0,0])
 l, r = CSetTransformation(I,L), CSetTransformation(I,R)
 m = CSetTransformation(L, G; V=[3])
-rw = sesqui_pushout_rewrite(r,l,m)
+rw = sesqui_pushout_rewrite(l,r,m)
 @test is_isomorphic(rw, @acset Graph begin
   V=3;E=1;src=[1];tgt=[2] end)
 
-end
+end # module
