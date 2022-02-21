@@ -1115,6 +1115,11 @@ function common_ob(A::Subobject, B::Subobject)
   return X
 end
 
+
+(f::CSetTransformation)(X::SubACSet)::SubACSet = Subobject(codom(f); Dict(
+    [k=>f.(collect(components(X)[k])) for (k,f) in pairs(components(f))])...)
+(f::CSetTransformation)(X::StructACSet)::SubACSet = f(top(X))
+
 # FIXME: Should these two accessors go elsewhere?
 
 @generated function all_subparts(X::StructACSet{S},

@@ -3,12 +3,12 @@ export rewrite, rewrite_match, pushout_complement, can_pushout_complement,
   id_condition, dangling_condition, sesqui_pushout_rewrite_data,
   sesqui_pushout_rewrite, final_pullback_complement,
   partial_map_classifier_universal_property, partial_map_classifier_eta,
-  partial_map_functor_hom, partial_map_functor_ob, topo_obs
+  partial_map_functor_hom, partial_map_functor_ob, topo_obs, single_pushout_rewrite_data, single_pushout_rewrite, open_rewrite, open_rewrite_match, pullback_complement
 
 using ...Theories
-using ..FinSets, ..CSets, ..FreeDiagrams, ..Limits
+using ..FinSets, ..CSets, ..FreeDiagrams, ..Limits, ..StructuredCospans
 using ..FinSets: id_condition
-using ..CSets: dangling_condition, SchemaDescType
+using ..CSets: dangling_condition, SchemaDescType, ¬
 using DataStructures
 using ...Graphs
 using ...Present
@@ -90,7 +90,6 @@ function topo_obs(S::Type)::Vector{Symbol}
 end
 
 function check_eqs(x::StructACSet, pres::Presentation, o::Symbol, i::Int)::Bool
-  println("o $o")
   for (p1,p2) in filter(e->only(e[1].type_args[1].args) == o, pres.equations)
     eval_path(x, p1, i) == eval_path(x,p2, i) || return false
   end
@@ -154,14 +153,12 @@ function partial_map_functor_ob(x::StructCSet{S};
       for c in Iterators.product([1:nparts(res,cd) for cd in cds]...)
         d[o][collect(c)] = v = add_part!(res, o; Dict(zip(homs,c))...)
         if !isnothing(pres) && !check_eqs(res, pres, o, v)
-          println("HERE v=$v c=$c")
           delete!(d[o], collect(c))
           rem_part!(res, o, v)
         end
       end
     end
   end
-  println("pres $pres")
   return res => d
 end
 
@@ -309,6 +306,156 @@ function sesqui_pushout_rewrite(
     pres::Union{Nothing, Presentation}=nothing)::StructCSet
   m__, _, _, _ = sesqui_pushout_rewrite_data(i,o,m;pres=pres)
   return codom(m__)
+end
+
+# Single pushout rewriting
+
+"""
+f         f
+A ↣ B     A ↣ B
+    ↓ g   ↓   ↓ g
+    C     D ↣ C
+
+Define D to be Im(g) to make it the largest possible subset of C such that we
+can get a pullback.
+"""
+function pullback_complement(f::CSetTransformation, g::CSetTransformation
+    )::Pair{CSetTransformation,CSetTransformation}
+    A = dom(f)
+    d_to_c = hom(¬g(¬f(A)))
+    # force square to commute by looking for the index in D making it commute
+    ad = Dict([cmp=>Int[findfirst(==(fg_a), collect(d_to_c[cmp]))
+                        for fg_a in collect(fg_as)]
+               for (cmp, fg_as) in pairs(compose(f,g).components)])
+    return CSetTransformation(A, dom(d_to_c); ad...) => d_to_c
+end
+"""
+NOTE: In the following diagram, a double arrow indicates a monic arrow.
+
+We start with two partial morphisms, construct M by pullback, then N & O by
+pullback complement, then finally D by pushout.
+
+            ⭆
+A ⇇ K → B         A ⇇ K → B
+⇈                 ⇈ ⌟ ⇈ ⌞ ⇈
+L                 L ⇇ M → N
+↓                 ↓ ⌞ ↓ ⌜ ↓
+C                 C ⇇ O → D
+
+We assume the input A→C is total, whereas A→B may be partial, so it is given
+as a monic K↣A and K→B.
+
+Specified in Fig 6 of:
+"Graph rewriting in some categories of partial morphisms"
+"""
+function single_pushout_rewrite_data(
+    ka::CSetTransformation, kb::CSetTransformation, ac::CSetTransformation
+    )::Vector{CSetTransformation}
+  e = "SPO rule is not a partial morphism. Left leg not monic."
+  is_injective(ka) || error(e)
+  lc, la = ac, id(dom(ac))
+  ml, mk = pullback(la, ka)
+  mn, nb = pullback_complement(mk, kb)
+  mo, oc = pullback_complement(ml, lc)
+  od, nd = pushout(mo, mn)
+  return [ml, mk, mn, mo, nb, oc, nd, od]
+end
+
+
+function single_pushout_rewrite(
+    ka::CSetTransformation, kb::CSetTransformation, ac::CSetTransformation
+    )::StructCSet
+  codom(last(single_pushout_rewrite_data(ka,kb,ac)))
+end
+
+
+# Structured multicospan rewriting
+##################################
+
+"""
+Helper function for open_pushout_complement
+Invert one (presumed iso) component of an ACSetTransformation (given by s)
+"""
+function invert(f::ACSetTransformation,s::Symbol)::ACSetTransformation
+  d = Dict([s=>Base.invperm(collect(f[s]))])
+  return ACSetTransformation(codom(f), dom(f); d...)
+end
+
+"""
+Initial data: 4 structured cospans + 3 cospan morphisms: μ, λ, ρ
+     g
+G₁₋ₙ --> G
+↑    l  ↑ μ
+L₁₋ₙ --> L
+↑    i  ↑ λ
+I₁₋ₙ --> I
+↓    r  ↓ ρ
+R₁₋ₙ --> R
+Computed data: 2 new structured cospans + 4 cospan morphisms: γ, η, ik, rh
+        G₁₋ₙ      G
+          ↑    k  ↑ γ   ik
+ I₁₋ₙ -> K₁₋ₙ  --> K    <-- I
+          ↓    h  ↓ η   rh
+ R₁₋ₙ -> H₁₋ₙ  --> H    <-- R
+In the context of the legs of a multicospan, the indices 1-n refer to the n
+legs of the cospan. In the context of a map of multicospans, there are 1-(n+1)
+maps, with the first one designating the map of the apexes. Hence it can make
+sense to have the elements: zip(legs, maps[2:end]) = [(legᵢ, mapᵢ), ...]
+"""
+function open_pushout_complement(
+    rule::openrule,
+    μ::StructuredMultiCospanHom)::openrule
+
+  # Unpack data
+  L_ = typeof(left(rule.data)).parameters[1];
+  ob = L_.parameters[1]
+  λ, ρ = rule.data;
+  I, R, G = dom(ρ), codom(ρ), codom(μ);
+
+  # Compute pushouts and pushout complements
+  ik_γ = [pushout_complement(λᵢ,μᵢ) for (λᵢ, μᵢ) in zip(λ.maps, μ.maps)];
+  rh_η = [legs(pushout(ρᵢ,ikᵢ)) for (ρᵢ, (ikᵢ, _)) in zip(ρ.maps, ik_γ)];
+  rh, ik = rh_η[1][1], ik_γ[1][1]
+  k = [compose(invert(ikᵢ, ob), iᵢ, ik) for (iᵢ, (ikᵢ, _))
+       in zip(legs(I), ik_γ[2:end])]
+  h = [compose(invert(rhᵢ, ob), r₍, rh) for (r₍, (rhᵢ, _))
+       in zip(legs(R), rh_η[2:end])]
+
+  # Reassemble resulting data into span of multicospans
+  feetK = [FinSet(nparts(codom(ikᵢ), ob)) for (ikᵢ, _) in ik_γ[2:end]]
+  feetH = [FinSet(nparts(codom(rhᵢ), ob)) for (rhᵢ, _) in rh_η[2:end]]
+  K = StructuredMulticospan{L_}(Multicospan(k), feetK)
+  H = StructuredMulticospan{L_}(Multicospan(h), feetH)
+  maps_γ = ACSetTransformation[γᵢ for (_, γᵢ) in ik_γ]
+  maps_η = ACSetTransformation[ηᵢ for (_, ηᵢ) in rh_η]
+  γ = StructuredMultiCospanHom(K, G, maps_γ)
+  η = StructuredMultiCospanHom(K, H, maps_η)
+  return openrule(Span(γ, η))
+end
+
+"""
+Extract the rewritten structured cospan from the induced rewrite rule
+"""
+function open_rewrite_match(
+    rule::openrule, m::StructuredMultiCospanHom)::StructuredMulticospan
+  right(open_pushout_complement(rule, m).data).tgt
+end
+
+"""
+Apply a rewrite rule to a structured multicospan, where a matching cospan
+homomorphism is found automatically. If multiple matches are found, a particular
+one can be selected using `m_index`. Returns `nothing` if none are found.
+"""
+function open_rewrite(rule::openrule, G::StructuredMulticospan;
+                      monic::Bool=false, m_index::Int=1)::StructuredMulticospan
+
+  ms = filter(m->can_open_pushout_complement(left(rule.data), m),
+              open_homomorphisms(left(rule.data).tgt, G, monic=monic))
+  if 0 < m_index <= length(ms)
+    open_rewrite_match(rule, ms[m_index])
+  else
+    nothing
+  end
 end
 
 end # module
