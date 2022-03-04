@@ -1,4 +1,5 @@
-module TestDPO
+#module TestDPO
+using Revise
 using Test
 
 using Catlab, Catlab.Theories, Catlab.CategoricalAlgebra
@@ -207,7 +208,7 @@ add_edges!(arrarr_loop,[1,1,2],[2,2,2]) # 1⇉2↺
 arr_looploop = Graph(2)
 add_edges!(arr_looploop, [1,2,2],[2,2,2]) # 1-> ↻2↺
 
-L = CSetTransformation(arr, arr, V=[1,2],E=[1]) # identity
+L = id(arr)
 R = CSetTransformation(arr, arrarr, V=[1,2], E=[1])
 m = CSetTransformation(arr, arr_loop, V=[2,2], E=[2]) # NOT MONIC
 @test is_isomorphic(arr_looploop, rewrite_match(L,R,m))
@@ -230,9 +231,20 @@ L = CSetTransformation(arr, biarr, V=[1,2], E=[1]); # delete one arrow
 span_triangle = Graph(3); # 2 <- 1 -> 3 (with edge 2->3)
 add_edges!(span_triangle,[1,1,2], [2,3,3]);
 
+tri_loop = deepcopy(tri)
+add_edge!(tri_loop, 1, 1)
+tri_edge = deepcopy(tri)
+add_edge!(tri_edge, add_vertex!(tri_edge), 2)
+
 L = CSetTransformation(arr, tri, V=[1,2], E=[1]);
+R = id(arr)
+N1 = homomorphism(tri, tri_loop);
+N2 = homomorphism(tri, tri_edge; monic=true);
 m = CSetTransformation(tri, squarediag, V=[2,4,3], E=[3,5,4]);
-@test is_isomorphic(span_triangle, rewrite_match(L,id(arr),m))
+r1 = rewrite_match(L, R, m; N=N1)
+r2 = rewrite_match(L, R, m; N=N2)
+@test isnothing(r2)
+@test is_isomorphic(span_triangle, r1)
 
 k, g = pushout_complement(L, m); # get PO complement to do further tests
 
@@ -303,4 +315,4 @@ m2 = CSetTransformation(Lspan, z_, V₁=[1], V₂=[2,1], E=[2, 1])
 @test is_isomorphic(parallel, rewrite_match(L, R, m1))
 @test is_isomorphic(merge, rewrite_match(L, R, m2))
 
-end
+#end
