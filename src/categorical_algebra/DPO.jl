@@ -19,7 +19,7 @@ using ...Present
 Given a span of morphisms, we seek to find a morphism B→C that makes a
 commuting triangle.
 
-   B
+    B
  g ↗ ↘ ?
  A ⟶ C
    f
@@ -43,10 +43,10 @@ function extend_morphism(f::ACSetTransformation, g::ACSetTransformation;
   ini = NamedTuple(Dict(init))
   homomorphism(codom(g), codom(f); initial=ini, monic=monic)
 end
-Apply a rewrite rule (given as a span, L<-I->R) to a ACSet
 
 """    rewrite_match_maps(L::ACSetTransformation, R::ACSetTransformation, m::ACSetTransformation)::Tuple{ACSetTransformation,ACSetTransformation,ACSetTransformation,ACSetTransformation}
 
+Apply a rewrite rule (given as a span, L<-I->R) to a ACSet
 using a match morphism `m` which indicates where to apply
 the rewrite.
               l   r

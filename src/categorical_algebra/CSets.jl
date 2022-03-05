@@ -6,7 +6,7 @@ export ACSetTransformation, CSetTransformation,
   ACSetHomomorphismAlgorithm, BacktrackingSearch, HomomorphismQuery,
   components, force, is_natural, homomorphism, homomorphisms, is_homomorphic,
   isomorphism, isomorphisms, is_isomorphic,
-  generate_json_acset, parse_json_acset, read_json_acset, write_json_acset
+  generate_json_acset, parse_json_acset, read_json_acset, write_json_acset, Var, sub_vars, get_vars
 
 using Base.Iterators: flatten
 using Base.Meta: quot
@@ -427,6 +427,9 @@ end
 
 # Finding C-set transformations
 ###############################
+struct Var
+  i::Any
+end
 
 """ Algorithm for finding homomorphisms between attributed ``C``-sets.
 """
@@ -556,7 +559,7 @@ is_isomorphic(X::ACSet, Y::ACSet, alg::BacktrackingSearch; kw...) =
 """
 struct BacktrackingState{S <: SchemaDescType,
     Assign <: NamedTuple, PartialAssign <: NamedTuple, LooseFun <: NamedTuple,
-    Dom <: StructACSet{S}, Codom <: StructACSet{S}}
+    Dom <: StructACSet{S}, Codom <: StructACSet{S}, VAssign <: NamedTuple}
   """ The current assignment, a partially-defined homomorphism of ACSets. """
   assignment::Assign
   """ Depth in search tree at which assignments were made. """
@@ -568,11 +571,67 @@ struct BacktrackingState{S <: SchemaDescType,
   """ Codomain ACSet: the "values" in the CSP. """
   codom::Codom
   type_components::LooseFun
+  var_assign::VAssign
+end
+
+function sub_vars(h::ACSetTransformation{S}, Y::StructACSet, vs::Dict)::ACSetTransformation where {S}
+  A,B = [sub_vars(x, Y, vs) for x in [dom(h), codom(h)]]
+  h_ = ACSetTransformation(A,B; components(h)...)
+  is_natural(h_) || error("$h_")
+  return h_
+end
+
+function sub_vars(X::StructACSet{S},Y::StructACSet,vs::Dict)::StructACSet where {S}
+  d = typeof(Y)()
+  for o in ob(S)
+    add_parts!(d, o, nparts(X, o))
+  end
+  for h in hom(S)
+    set_subpart!(d, h, X[h])
+  end
+  for (at, cd) in zip(attr(S), acodom(S))
+    println([sub_vars(v, vs[cd]) for v in X[at]])
+    set_subpart!(d, at, [sub_vars(v, vs[cd]) for v in X[at]])
+  end
+  return d
+end
+function rep!(e, old, new)
+  for (i,a) in enumerate(e.args)
+      if a==old
+          e.args[i] = new
+      elseif a isa Expr
+          rep!(a, old, new)
+      end ## otherwise do nothing
+  end
+  e
+end
+
+sub_vars(v::Var, vs::Dict) = vs[v]
+function sub_vars(x::Expr, vs::Dict)
+  for (k, v) in pairs(vs)
+    kk = Meta.parse(string(k))
+    rep!(x, kk, v)
+  end
+  return eval(x)
+end
+sub_vars(v::Any, _::Dict) = v
+
+
+function get_vars(X::StructACSet{S},Y::StructACSet) where S
+  res = Dict([d=>Dict() for d in acodom(S)])
+  for (at, cd) in zip(attr(S), acodom(S))
+    for (x,y) in zip(X[at], Y[at])
+      if x isa Var
+        res[cd][x] = y
+      end
+    end
+  end
+  res
 end
 
 function backtracking_search(f, X::StructACSet{S}, Y::StructACSet{S};
                              monic=false, iso=false, type_components=(;), initial=(;),
-                             ) where {Ob, Hom, Attr, S<:SchemaDescType{Ob,Hom,Attr}}
+                             ) where {Ob, Hom, Attr, AttrType, S<:SchemaDescType{Ob,Hom,Attr}}
   # Fail early if no monic/isos exist on cardinality grounds.
   if iso isa Bool
     iso = iso ? Ob : ()
@@ -589,6 +648,21 @@ function backtracking_search(f, X::StructACSet{S}, Y::StructACSet{S};
     nparts(X,c) <= nparts(Y,c) || return false
   end
 
+  # Get variables
+  d = Dict{Symbol, Union{Nothing, Dict}}([x=>Dict() for x in Attr])
+  map(zip(attr(S), acodom(S))) do (f, D)
+    if any(v->v isa Var, Y[f])
+      d[D] = nothing
+    end
+    map(filter(v->v isa Var, X[f])) do (v)
+      if !isnothing(d[D])
+        d[D][v] = (0, nothing)
+      end
+    end
+  end
+  vassign = NamedTuple{Attr}([d[a] for a in Attr])
+
+
   # Initialize state variables for search.
   assignment = NamedTuple{Ob}(zeros(Int, nparts(X, c)) for c in Ob)
   assignment_depth = map(copy, assignment)
@@ -597,7 +671,7 @@ function backtracking_search(f, X::StructACSet{S}, Y::StructACSet{S};
   loosefuns = NamedTuple{Attr}(
     isnothing(type_components) ? identity : get(type_components, c, identity) for c in Attr)
   state = BacktrackingState(assignment, assignment_depth, inv_assignment, X, Y,
-                            loosefuns)
+                            loosefuns, vassign)
 
   # Make any initial assignments, failing immediately if inconsistent.
   for (c, c_assignments) in pairs(initial)
@@ -619,7 +693,14 @@ function backtracking_search(f, state::BacktrackingState{S}, depth::Int) where {
       return f(LooseACSetTransformation{S}(
         state.assignment, state.type_components, state.dom, state.codom))
     else
-      return f(ACSetTransformation(state.assignment, state.dom, state.codom))
+      if any(x->!isnothing(x) && !isempty(x), state.var_assign)
+        va = Dict([k=>Dict([k_ => v_[2] for (k_, v_) in pairs(v)])
+                  for (k, v) in pairs(state.var_assign)])
+        d = sub_vars(state.dom, state.codom, va)
+        return f(ACSetTransformation(state.assignment, d, state.codom))
+      else
+        return f(ACSetTransformation(state.assignment, state.dom, state.codom))
+      end
     end
   elseif mrv == 0
     # An element has no allowable assignment, so we must backtrack.
@@ -688,7 +769,10 @@ be mutated even when the assignment fails.
     X, Y = state.dom, state.codom
     $(map(zip(attr(S), adom(S), acodom(S))) do (f, c_, d)
          :($(quot(c_))!=c
-             || state.type_components[$(quot(d))](subpart(X,x,$(quot(f))))
+          ||(subpart(X,x,$(quot(f))) isa Var && !isnothing(state.var_assign[$(quot(d))])
+             && (state.var_assign[$(quot(d))][subpart(X,x,$(quot(f)))][1] == 0
+              ||(state.var_assign[$(quot(d))][subpart(X,x,$(quot(f)))][2] == subpart(Y,y,$(quot(f)))) ))
+         || state.type_components[$(quot(d))](subpart(X,x,$(quot(f))))
                  == subpart(Y,y,$(quot(f))) || return false)
       end...)
 
@@ -698,6 +782,14 @@ be mutated even when the assignment fails.
     if !isnothing(state.inv_assignment.$c)
       state.inv_assignment.$c[y] = x
     end
+    $(map(zip(attr(S), adom(S), acodom(S))) do (f, c_, d)
+         :(if ($(quot(c_))==c
+              && subpart(X,x,$(quot(f))) isa Var
+              && !isnothing(state.var_assign[$(quot(d))]))
+             state.var_assign[$(quot(d))][subpart(X,x,$(quot(f)))]=(
+               state.var_assign[$(quot(d))][subpart(X,x,$(quot(f)))][1]+1,subpart(Y,y,$(quot(f))))
+           end)
+      end...)
     $(map(out_hom(S, c)) do (f, d)
         :(assign_elem!(state, depth, Val{$(quot(d))}, subpart(X,x,$(quot(f))),
                        subpart(Y,y,$(quot(f)))) || return false)
@@ -720,6 +812,15 @@ end
         y = state.assignment.$c[x]
         state.inv_assignment.$c[y] = 0
       end
+      $(map(zip(attr(S), adom(S), acodom(S))) do (f, c_, d)
+      :(if ($(quot(c_))==c && !isnothing(state.var_assign[$(quot(d))])
+           && subpart(X,x,$(quot(f))) isa Var)
+          state.var_assign[$(quot(d))][subpart(X,x,$(quot(f)))]=(
+            state.var_assign[$(quot(d))][subpart(X,x,$(quot(f)))][1]-1,
+            state.var_assign[$(quot(d))][subpart(X,x,$(quot(f)))][2])
+            end)
+      end...)
+
       state.assignment.$c[x] = 0
       state.assignment_depth.$c[x] = 0
       $(map(out_hom(S, c)) do (f, d)
