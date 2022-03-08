@@ -6,7 +6,7 @@ export ACSetTransformation, CSetTransformation,
   ACSetHomomorphismAlgorithm, BacktrackingSearch, HomomorphismQuery,
   components, force, is_natural, homomorphism, homomorphisms, is_homomorphic,
   isomorphism, isomorphisms, is_isomorphic,
-  generate_json_acset, parse_json_acset, read_json_acset, write_json_acset, Var, sub_vars, get_vars
+  generate_json_acset, parse_json_acset, read_json_acset, write_json_acset, Var, sub_vars, get_vars, restrict, invert
 
 using Base.Iterators: flatten
 using Base.Meta: quot
@@ -574,15 +574,17 @@ struct BacktrackingState{S <: SchemaDescType,
   var_assign::VAssign
 end
 
-function sub_vars(h::ACSetTransformation{S}, Y::StructACSet, vs::Dict)::ACSetTransformation where {S}
+function sub_vars(h::ACSetTransformation{S}, Y::Union{Nothing,StructACSet},
+                  vs::D)::ACSetTransformation where {S, D<:AbstractDict}
   A,B = [sub_vars(x, Y, vs) for x in [dom(h), codom(h)]]
   h_ = ACSetTransformation(A,B; components(h)...)
   is_natural(h_) || error("$h_")
   return h_
 end
 
-function sub_vars(X::StructACSet{S},Y::StructACSet,vs::Dict)::StructACSet where {S}
-  d = typeof(Y)()
+function sub_vars(X::StructACSet{S},Y::Union{Nothing,StructACSet},vs::D
+                  )::StructACSet where {S, D<:AbstractDict}
+  d = typeof(isnothing(Y) ? X : Y)()
   for o in ob(S)
     add_parts!(d, o, nparts(X, o))
   end
@@ -590,8 +592,7 @@ function sub_vars(X::StructACSet{S},Y::StructACSet,vs::Dict)::StructACSet where 
     set_subpart!(d, h, X[h])
   end
   for (at, cd) in zip(attr(S), acodom(S))
-    println([sub_vars(v, vs[cd]) for v in X[at]])
-    set_subpart!(d, at, [sub_vars(v, vs[cd]) for v in X[at]])
+    set_subpart!(d, at, [sub_vars(deepcopy(v), get(vs,cd,Dict())) for v in X[at]])
   end
   return d
 end
@@ -606,15 +607,15 @@ function rep!(e, old, new)
   e
 end
 
-sub_vars(v::Var, vs::Dict) = vs[v]
-function sub_vars(x::Expr, vs::Dict)
+sub_vars(v::Var, vs::AbstractDict) = get(vs, v, v)
+function sub_vars(x::Expr, vs::AbstractDict)
   for (k, v) in pairs(vs)
     kk = Meta.parse(string(k))
     rep!(x, kk, v)
   end
   return eval(x)
 end
-sub_vars(v::Any, _::Dict) = v
+sub_vars(v::Any, _::AbstractDict) = v
 
 
 function get_vars(X::StructACSet{S},Y::StructACSet) where S
@@ -699,7 +700,8 @@ function backtracking_search(f, state::BacktrackingState{S}, depth::Int) where {
         d = sub_vars(state.dom, state.codom, va)
         return f(ACSetTransformation(state.assignment, d, state.codom))
       else
-        return f(ACSetTransformation(state.assignment, state.dom, state.codom))
+        d = sub_vars(state.dom, state.codom, Dict()) # figure out how to remove this
+        return f(ACSetTransformation(state.assignment, d, state.codom))
       end
     end
   elseif mrv == 0
@@ -1231,9 +1233,47 @@ function common_ob(A::Subobject, B::Subobject)
 end
 
 
-(f::CSetTransformation)(X::SubACSet)::SubACSet = Subobject(codom(f); Dict(
+(f::ACSetTransformation)(X::SubACSet)::SubACSet = Subobject(codom(f); Dict(
     [k=>f.(collect(components(X)[k])) for (k,f) in pairs(components(f))])...)
-(f::CSetTransformation)(X::StructACSet)::SubACSet = f(top(X))
+(f::ACSetTransformation)(X::StructACSet)::SubACSet = f(top(X))
+
+
+"""A morphism may not be invertible for two reasons
+1. Two things map onto one
+2. Something is not mapped to
+
+This function bypasses the first constraint by picking one arbitrarily.
+Will fail if the second condition is not met
+"""
+function invert(f::ACSetTransformation{S}; inj::Bool=false,surj::Bool=false)::ACSetTransformation where S
+  if inj && surj
+    d = Dict([s=>Base.invperm(collect(f[s])) for s in ss])
+    return ACSetTransformation(codom(f), dom(f); d...)
+  end
+  d = Dict(map(ob(S)) do s
+    s=>map(parts(codom(f), s)) do i
+      pre = preimage(f[s], i)
+      if length(pre) == 1
+        return only(pre)
+      elseif length(pre) == 0
+        !surj || error("Expected to 'invert' a surjective map")
+        return 1
+      else
+        !inj || error("Expected to 'invert' an injective map")
+        return first(pre)
+      end
+    end
+  end)
+  return ACSetTransformation(codom(f), dom(f); d...)
+end
+
+function restrict(f::ACSetTransformation, X::SubACSet)
+  codom(hom(X)) == dom(f)
+  cod = f(X)
+  submap = invert(hom(cod))
+  comps = components(compose(hom(X), f, submap))
+  ACSetTransformation(dom(hom(X)), dom(hom(cod)); comps...) => cod
+end
 
 # FIXME: Should these two accessors go elsewhere?
 

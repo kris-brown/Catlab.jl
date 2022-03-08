@@ -3,21 +3,170 @@ export rewrite, rewrite_match, pushout_complement, can_pushout_complement,
   id_condition, dangling_condition, sesqui_pushout_rewrite_data,
   sesqui_pushout_rewrite, final_pullback_complement,
   partial_map_classifier_universal_property, partial_map_classifier_eta,
-  partial_map_functor_hom, partial_map_functor_ob, topo_obs, single_pushout_rewrite_data, single_pushout_rewrite, open_rewrite, open_rewrite_match, pullback_complement, extend_morphism
+  partial_map_functor_hom, partial_map_functor_ob, topo_obs,
+  single_pushout_rewrite_data, single_pushout_rewrite, open_rewrite,
+  open_rewrite_match, pullback_complement, extend_morphism, Rule,
+  apply_parallel_rule, normalize, copairs, invert, quotient_acset,
+  quotient_domain, quotient_codomain
 
 using ...Theories
+using ...Theories: attr, adom
 using ..FinSets, ..CSets, ..FreeDiagrams, ..Limits, ..StructuredCospans
 using ..FinSets: id_condition
-using ..CSets: dangling_condition, SchemaDescType, ¬
+using ..CSets: dangling_condition, SchemaDescType, ¬, ⊤
 using DataStructures
 using ...Graphs
 using ...Present
+
 # Double-pushout rewriting
 ##########################
 
+struct Rule
+  L::ACSetTransformation
+  R::ACSetTransformation
+  N::Union{Nothing, ACSetTransformation}
+  monic::Bool
+  function Rule(L::ACSetTransformation, R::ACSetTransformation,
+                N::Union{Nothing, ACSetTransformation}=nothing,
+                monic::Bool=false)
+    #dom(L) == dom(R) || error("L<->R not a span") # type issues...
+    # isnothing(N) || dom(N) == codom(L) || error("NAC does not compose with L")
+    new(L, R, N, monic)
+  end
+end
+
+"""Taken from the pure chase PR that has not yet been merged"""
+function copairs(xs::Vector{T}, shared_tgt::Bool
+                )::ACSetTransformation where T<:ACSetTransformation
+  comps = Dict([k=>Int[] for k in keys(xs[1].components)])
+  new_d = Base.invokelatest(typeof(dom(xs[1])))
+  new_cd = shared_tgt ? codom(xs[1]) : Base.invokelatest(typeof(codom(xs[1])))
+  for x in xs
+    copy_parts!(new_d,dom(x))
+    if shared_tgt
+      for k in keys(x.components)
+        append!(comps[k], collect(x[k]))
+      end
+    else
+      for (k,v) in pairs(copy_parts!(new_cd,codom(x)))
+        append!(comps[k], [v.start + vv - 1 for vv in collect(x[k])])
+      end
+    end
+  end
+  return ACSetTransformation(new_d, new_cd; comps...)
+end
+
+function quotient_acset(X::StructACSet{S}, d) where {S}
+  new_X = typeof(X)()
+  map(collect(d)) do (c, dup)
+    add_parts!(new_X, c, nparts(X, c) - length(dup))
+  end
+  map(zip(hom(S), dom(S), codom(S))) do (f, s, t)
+    cmp = [get(d[t], v, v) for (i, v) in enumerate(X[f]) if !haskey(d[s], i)]
+    set_subpart!(new_X, f, cmp)
+  end
+
+  map(zip(attr(S), adom(S))) do (f, s)
+    cmp = [v for (i, v) in enumerate(X[f]) if !haskey(d[s], i)]
+    set_subpart!(new_X, f, cmp)
+  end
+
+  new_X
+end
+function quotient_codomain(f::ACSetTransformation, d)
+  t = quotient_acset(codom(f), d)
+  comps = Dict(map(collect(pairs(components(f)))) do (c, fun)
+    c=>[get(d[c],v,v) for (i, v) in enumerate(collect(fun))]
+  end)
+
+  return ACSetTransformation(dom(f), t; comps...)
+
+end
+function quotient_domain(f::ACSetTransformation, d)
+  s = quotient_acset(dom(f), d)
+  comps = Dict(map(collect(pairs(components(f)))) do (c, fun)
+    c=>[v for (i, v) in enumerate(collect(fun)) if !haskey(d[c], i)]
+  end)
+  return ACSetTransformation(s, codom(f); comps...)
+end
+
+function apply_parallel_rule(rule::Rule, G::StructACSet{S}; monic::Bool=false
+                            )::Union{StructACSet, Nothing} where S
+  ms, seen  = ACSetTransformation[], [Set{Int}() for _ in ob(S)]
+  vars = DefaultDict{Symbol,Dict}(()->Dict())
+  LRN = [rule.L, rule.R, rule.N]
+  # Get all valid matches, greedily keep the ones that can be done in parallel
+  for m in homomorphisms(codom(rule.L), G; monic=monic||rule.monic)
+    new_vars = get_vars(codom(rule.L), dom(m))
+    bs = map(collect(new_vars)) do (k, nvs)
+      all([(get(vars[k], nk, nv) == nv) for (nk, nv) in collect(nvs)])
+    end
+    if all(bs)
+      [merge!(vars[k], nvs) for (k, nvs) in collect(new_vars)]
+    else
+      #println("Inconsistent new vars $vars \n$new_vars")
+      continue
+    end
+
+    L = sub_vars(LRN[1], G, vars)#isempty(vars) ? LRN : [isnothing(x) ? x : sub_vars(x, G, vars) for x in LRN]
+    # println("codom L $(codom(L))\ndom(m) $(dom(m))")
+    if can_pushout_complement(L, m)
+      nac = isnothing(LRN[3]) ? nothing : extend_morphism(
+        m, sub_vars(LRN[3], nothing, vars))
+      if isnothing(nac)
+        new_dels = map(zip(components(L), components(m))) do (l_comp, m_comp)
+          image = Set(collect(l_comp))
+          (Set([ m_comp(x) for x in codom(l_comp) if x ∉ image ])
+            => Set(m_comp(collect(image))))
+        end
+        if all(isempty.([x∩new_keep for (x,(_, new_keep)) in zip(seen, new_dels)]))
+        [union!(x, union(new_del, new_keep) ) for (x,(new_del, new_keep))
+         in zip(seen, new_dels)]
+          push!(ms, m)
+        end
+      end
+    end
+  end
+
+  n = length(ms)
+  if n == 0 return nothing end
+  L, R = isempty(vars) ? LRN : [sub_vars(x, G, vars) for x in LRN[1:2]]
+  is_natural(L) || error("L $L")
+  is_natural(R) || error("R $R")
+
+  # Create parallel rule
+  m_paired = copairs(ms, true)
+  l_paired = copairs([L for _ in 1:n], false)
+  r_paired = copairs([R for _ in 1:n], false)
+  can_pushout_complement(l_paired,m_paired) || error("PO n $n del $del \nms $ms \nm_paired $m_paired")
+  rewrite_match(l_paired,r_paired,m_paired)
+end
+
+"""Applies rules until they cannot be applied anymore"""
+normalize(rs::Vector{Rule}, G::StructACSet) = normalize([
+  Symbol(string(i))=>r for (i, r) in enumerate(rs)], G)
+
+function normalize(rs::Vector{Pair{Symbol,Rule}}, G::StructACSet)
+  while true
+    updated=false
+    for (n, r) in rs
+      println("Applying rule $n")
+      res = apply_parallel_rule(r, G; monic=true)
+      if !isnothing(res)
+        println("res $res")
+        G = res
+        updated |= true
+      end
+    end
+    if !updated
+      return G
+    end
+  end
+end
+
 """    extend_morphism(f::ACSetTransformation,g::ACSetTransformation)::Union{Nothing, ACSetTransformation}
 Given a span of morphisms, we seek to find a morphism B→C that makes a
-commuting triangle.
+commuting triangle if possible.
 
     B
  g ↗ ↘ ?
@@ -26,7 +175,8 @@ commuting triangle.
 """
 function extend_morphism(f::ACSetTransformation, g::ACSetTransformation;
                          monic=false)::Union{Nothing, ACSetTransformation}
-  dom(f) == dom(g) || error("NAC morphism doesn't match L")
+  jf, jg = generate_json_acset.([dom(f), dom(g)])
+  jf == jg || error("f and g are not a span: $jf \n$jg")
 
   init = map(collect(pairs(components(f)))) do (ob, mapping)
     init_comp = Pair{Int,Int}[]
@@ -426,14 +576,6 @@ end
 # Structured multicospan rewriting
 ##################################
 
-"""
-Helper function for open_pushout_complement
-Invert one (presumed iso) component of an ACSetTransformation (given by s)
-"""
-function invert(f::ACSetTransformation,s::Symbol)::ACSetTransformation
-  d = Dict([s=>Base.invperm(collect(f[s]))])
-  return ACSetTransformation(codom(f), dom(f); d...)
-end
 
 """
 Initial data: 4 structured cospans + 3 cospan morphisms: μ, λ, ρ
@@ -470,14 +612,14 @@ function open_pushout_complement(
   ik_γ = [pushout_complement(λᵢ,μᵢ) for (λᵢ, μᵢ) in zip(λ.maps, μ.maps)];
   rh_η = [legs(pushout(ρᵢ,ikᵢ)) for (ρᵢ, (ikᵢ, _)) in zip(ρ.maps, ik_γ)];
   rh, ik = rh_η[1][1], ik_γ[1][1]
-  k = [compose(invert(ikᵢ, ob), iᵢ, ik) for (iᵢ, (ikᵢ, _))
+  k = [compose(invert(ikᵢ), iᵢ, ik) for (iᵢ, (ikᵢ, _))
        in zip(legs(I), ik_γ[2:end])]
-  h = [compose(invert(rhᵢ, ob), r₍, rh) for (r₍, (rhᵢ, _))
+  h = [compose(invert(rhᵢ), r₍, rh) for (r₍, (rhᵢ, _))
        in zip(legs(R), rh_η[2:end])]
 
   # Reassemble resulting data into span of multicospans
-  feetK = [FinSet(nparts(codom(ikᵢ), ob)) for (ikᵢ, _) in ik_γ[2:end]]
-  feetH = [FinSet(nparts(codom(rhᵢ), ob)) for (rhᵢ, _) in rh_η[2:end]]
+  feetK = [FinSet(nparts(codom(ikᵢ))) for (ikᵢ, _) in ik_γ[2:end]]
+  feetH = [FinSet(nparts(codom(rhᵢ))) for (rhᵢ, _) in rh_η[2:end]]
   K = StructuredMulticospan{L_}(Multicospan(k), feetK)
   H = StructuredMulticospan{L_}(Multicospan(h), feetH)
   maps_γ = ACSetTransformation[γᵢ for (_, γᵢ) in ik_γ]
