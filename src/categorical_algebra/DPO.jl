@@ -213,11 +213,7 @@ Returns:
 - the morphisms I->K, K->G (produced by pushout complement), followed by
   R->H, and K->H (produced by pushout)
 """
-function rewrite_match_maps(
-    L::ACSetTransformation, R::ACSetTransformation, m::ACSetTransformation;
-    N::Union{Nothing,ACSetTransformation}=nothing)::Union{Nothing, Tuple{
-      ACSetTransformation,ACSetTransformation,
-      ACSetTransformation,ACSetTransformation}}
+function rewrite_match_maps(L, R, m; N=nothing)
   # Check domains
   dom(L) == dom(R) || error("Rewriting where L, R do not share domain")
   codom(L) == dom(m) || error("Rewriting where L does not compose with m")
@@ -238,9 +234,7 @@ Apply a rewrite rule (given as a span, L<-I->R) to a ACSet
 using a match morphism `m` which indicates where to apply
 the rewrite. Return the rewritten ACSet.
 """
-rewrite_match(L::ACSetTransformation, R::ACSetTransformation,
-  m::ACSetTransformation; N::Union{Nothing,ACSetTransformation}=nothing
-  )::Union{Nothing,ACSet} =
+rewrite_match(L, R, m; N=nothing) =
   let res=rewrite_match_maps(L, R, m; N=N);
       isnothing(res) ? res : codom(res[4]) end
 
