@@ -150,10 +150,10 @@ function normalize(rs::Vector{Pair{Symbol,Rule}}, G::StructACSet)
   while true
     updated=false
     for (n, r) in rs
-      println("Applying rule $n")
+      #println("Applying rule $n")
       res = apply_parallel_rule(r, G; monic=true)
       if !isnothing(res)
-        println("res $res")
+        #println("res $res")
         G = res
         updated |= true
       end
@@ -618,8 +618,8 @@ function open_pushout_complement(
        in zip(legs(R), rh_η[2:end])]
 
   # Reassemble resulting data into span of multicospans
-  feetK = [FinSet(nparts(codom(ikᵢ))) for (ikᵢ, _) in ik_γ[2:end]]
-  feetH = [FinSet(nparts(codom(rhᵢ))) for (rhᵢ, _) in rh_η[2:end]]
+  feetK = [FinSet(nparts(codom(ikᵢ), ob)) for (ikᵢ, _) in ik_γ[2:end]]
+  feetH = [FinSet(nparts(codom(rhᵢ), ob)) for (rhᵢ, _) in rh_η[2:end]]
   K = StructuredMulticospan{L_}(Multicospan(k), feetK)
   H = StructuredMulticospan{L_}(Multicospan(h), feetH)
   maps_γ = ACSetTransformation[γᵢ for (_, γᵢ) in ik_γ]
