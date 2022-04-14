@@ -250,6 +250,15 @@ function limit(cospan::Multicospan{<:TypeSet})
     error("Pullbacks of TypeSets that are not products are not supported")
 end
 
+function limit(ps::ParallelMorphisms{<:TypeSet})
+  err = "equalizers of TypeSets that are not identity not supported"
+  eltype(codom(ps)) == Nothing || error(err)
+  d = dom(ps)
+  Limit(ps, Multispan(d, [IdentityFunction(d, d)]))
+end
+
+universal(ps::Equalizer{<:TypeSet}, span::Multispan) = only(span) ⋅ incl(ps)
+
 # Colimits
 ##########
 
